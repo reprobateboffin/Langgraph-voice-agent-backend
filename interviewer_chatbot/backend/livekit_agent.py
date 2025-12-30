@@ -18,9 +18,11 @@ from livekit.plugins.langchain import LLMAdapter
 from langgraph.graph import StateGraph, END
 from services.gemini_client import gemini_client
 from contextlib import asynccontextmanager
+from livekit.agents import AgentServer
 
 logger = logging.getLogger("voice-agent")
 load_dotenv()
+server = AgentServer()
 
 
 class State(TypedDict):
@@ -141,6 +143,7 @@ class VoiceAgent(Agent):
             logger.exception("Failed to send filler response")
 
 
+@server.rtc_session(agent_name="voice-agent")
 async def entrypoint(ctx: JobContext):
     """
     Main entrypoint for LiveKit worker. Initializes the session and starts the agent.
@@ -187,7 +190,7 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="noice-agent"))
 
 
 # import os

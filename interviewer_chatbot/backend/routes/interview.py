@@ -11,7 +11,12 @@ from config.settings import settings
 import time
 import random
 import string
-
+from livekit.api import (
+    AccessToken,
+    VideoGrants,
+    RoomConfiguration,
+    RoomAgentDispatch,
+)
 
 router = APIRouter(tags=["Interview"])
 LIVEKIT_API_KEY = settings.livekit_api_key
@@ -187,22 +192,38 @@ class JoinRequest(BaseModel):
 
 @router.post("/join")
 def join_meeting(req: JoinRequest):
-    """
-    Generates a LiveKit access token for a user to join a room.
-    """
     try:
-        # Create token
-        token = AccessToken(api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
         interview_id = uuid.uuid4().hex[:6]
-        # Set identity
-        token = token.with_identity(req.username)
-        room_name = f"interview-{interview_id}-{int(time.time() * 1000)}-{''.join(random.choices(string.ascii_lowercase + string.digits, k=7))}"
+        room_name = (
+            f"interview-{interview_id}-{int(time.time() * 1000)}-"
+            f"{''.join(random.choices(string.ascii_lowercase + string.digits, k=7))}"
+        )
 
-        # Grant permission to join the room
-        token = token.with_grants(VideoGrants(room_join=True, room=room_name))
+        token = (
+            AccessToken(
+                api_key=LIVEKIT_API_KEY,
+                api_secret=LIVEKIT_API_SECRET,
+            )
+            .with_identity(req.username)
+            .with_grants(VideoGrants(room_join=True, room=room_name))
+            .with_room_config(
+                RoomConfiguration(
+                    agents=[
+                        RoomAgentDispatch(
+                            agent_name="voice-agent",
+                            metadata='{"role":"interviewer"}',
+                        )
+                    ]
+                )
+            )
+            .to_jwt()
+        )
 
-        # Return JWT and LiveKit URL
-        return {"token": token.to_jwt(), "url": LIVEKIT_URL, "room_name": room_name}
+        return {
+            "token": token,
+            "url": LIVEKIT_URL,
+            "room_name": room_name,
+        }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate token: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
