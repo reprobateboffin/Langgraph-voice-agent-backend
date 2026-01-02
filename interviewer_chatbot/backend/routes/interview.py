@@ -1,3 +1,4 @@
+import json
 from fastapi import APIRouter, Form, File, UploadFile, HTTPException
 from pydantic import BaseModel
 import uuid
@@ -17,6 +18,7 @@ from livekit.api import (
     RoomConfiguration,
     RoomAgentDispatch,
 )
+from utils.cv_tools import save_cv_and_return_id
 
 router = APIRouter(tags=["Interview"])
 LIVEKIT_API_KEY = settings.livekit_api_key
@@ -188,30 +190,45 @@ async def continue_interview(req: ContinueRequest):
 
 class JoinRequest(BaseModel):
     username: str
+    job_title: str
+    question_type: str
+    cv: Optional[UploadFile] = (File(None),)
 
 
 @router.post("/join")
-def join_meeting(req: JoinRequest):
-    try:
-        interview_id = uuid.uuid4().hex[:6]
-        room_name = (
-            f"interview-{interview_id}-{int(time.time() * 1000)}-"
-            f"{''.join(random.choices(string.ascii_lowercase + string.digits, k=7))}"
-        )
+def join_meeting(
+    username: str = Form(...),
+    job_title: str = Form(...),
+    room_name: str = Form(...),
+    question_type: str = Form(...),
+    cv: UploadFile | None = File(None),
+):
 
+    try:
+
+        cv_id = save_cv_and_return_id(cv) if cv else None
+
+        interview_id = uuid.uuid4().hex[:6]
+
+        metadata = {
+            "role": "interviewer",
+            "job_title": job_title,
+            "question_type": question_type,
+            "cv_path": cv_id,
+        }
         token = (
             AccessToken(
                 api_key=LIVEKIT_API_KEY,
                 api_secret=LIVEKIT_API_SECRET,
             )
-            .with_identity(req.username)
+            .with_identity(username)
             .with_grants(VideoGrants(room_join=True, room=room_name))
             .with_room_config(
                 RoomConfiguration(
                     agents=[
                         RoomAgentDispatch(
                             agent_name="voice-agent",
-                            metadata='{"role":"interviewer"}',
+                            metadata=json.dumps(metadata),
                         )
                     ]
                 )
