@@ -1,6 +1,28 @@
+from asyncio.log import logger
 import fitz
 from langchain_core.documents import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+
+from fastapi import UploadFile, File, Form
+
+import uuid
+import shutil
+from pathlib import Path
+
+CV_DIR = Path("data/cv")
+CV_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def save_cv_and_return_id(cv: UploadFile) -> str:
+    cv_id = f"cv_{uuid.uuid4().hex}"
+    file_ext = Path(cv.filename).suffix
+    file_path = CV_DIR / f"{cv_id}{file_ext}"
+
+    with file_path.open("wb") as buffer:
+        shutil.copyfileobj(cv.file, buffer)
+
+    return str(file_path)
 
 
 def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
@@ -57,3 +79,16 @@ def chunk_cv_text(cv_text: str, user_id: str = "default_user") -> list:
         return documents
     except Exception as e:
         raise RuntimeError(f"Failed to chunk CV text: {e}")
+
+
+# for loading cv text for livekit's langgraph agent
+def load_cv_text(cv_path: str) -> str:
+    if not cv_path:
+        return ""
+
+    try:
+        with open(cv_path, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read()
+    except Exception as e:
+        logger.error("Failed to load CV: %s", e)
+        return ""
