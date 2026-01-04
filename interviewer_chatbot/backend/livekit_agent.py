@@ -20,6 +20,7 @@ from langgraph.graph import StateGraph, END
 from services.gemini_client import gemini_client
 from contextlib import asynccontextmanager
 from livekit.agents import AgentServer
+import uuid
 
 logger = logging.getLogger("voice-agent")
 load_dotenv()
@@ -27,173 +28,150 @@ server = AgentServer()
 
 
 class State(TypedDict):
-    """Workflow state for interview."""
+    """Interview workflow state - SIMPLIFIED"""
 
     step: int
-    max_steps: int
     current_question: str
-    user_response: str
-    completed: bool
 
 
-def start_node(state: State):
-    """Generate the first interview question."""
-    question = "Hello, welcome to the interview. Please start by introducing yourself."
+# SIMPLE NODE that just increments and returns question
+def question_node(state: State):
+    step = state["step"]
 
-    return {"current_question": question, "step": 1, "completed": False}
+    # Define actual questions (not just numbers)
+    questions = [
+        "Hello, welcome to our company. Let's start with your qualifications.",
+        "Tell me about your work experience.",
+        "What are your technical skills?",
+        "Why do you want to work here?",
+        "Where do you see yourself in 5 years?",
+        "What's your experience with version control?",
+        "How do you handle tight deadlines?",
+        "Do you have any questions for me?",
+    ]
 
-
-def continue_interview_node(state: State):
-    """Generate subsequent interview questions."""
-    try:
-        if state.get("completed", False):
-            return {
-                "current_question": "Thank you! Interview complete.",
-                "completed": True,
-            }
-
-        if state["step"] >= state["max_steps"]:
-            return {
-                "current_question": "That's all the questions. Thank you!",
-                "completed": True,
-            }
-
-        # Use Gemini for dynamic questions
-        prompt = f"""Generate interview question number {state['step']} for a job interview.
-        Previous answer was: {state.get('user_response', 'No answer yet')}
-        Make it a follow-up question."""
-
-        question = gemini_client.generate_content(prompt)
-
-    except Exception as e:
-        logger.exception("Error in continue_interview_node")
-        question = f"Question {state['step']}: Please continue."
-
-    return {"current_question": question, "step": state["step"] + 1, "completed": False}
-
-
-def create_start_workflow():
-    """Workflow for first question only."""
-    try:
-        graph = StateGraph(State)
-        graph.add_node("start", start_node)
-        graph.set_entry_point("start")
-        graph.add_edge("start", END)
-        return graph.compile()
-    except Exception as e:
-        logger.exception("Failed to create start workflow")
-        raise
-
-
-def create_continue_workflow():
-    """Workflow for follow-up questions."""
-    try:
-        graph = StateGraph(State)
-        graph.add_node("continue", continue_interview_node)
-        graph.set_entry_point("continue")
-        graph.add_edge("continue", END)
-        return graph.compile()
-    except Exception as e:
-        logger.exception("Failed to create continue workflow")
-        raise
-
-
-def extract_user_text(chat_ctx):
-    """
-    Safely extract user text from chat context.
-    Handles different message formats.
-    """
-    if not chat_ctx.items:
-        return ""
-
-    # Get the last message
-    last_msg = chat_ctx.items[-1]
-
-    # Try different ways to extract text
-    if hasattr(last_msg, "content"):
-        text = last_msg.content
-    elif hasattr(last_msg, "text"):
-        text = last_msg.text
-    elif hasattr(last_msg, "message"):
-        text = last_msg.message
+    # Get question based on step
+    if step < len(questions):
+        question = questions[step]
     else:
-        text = str(last_msg)
+        question = f"Question {step + 1}: Please continue."
 
-    # If text is a list, join it
-    if isinstance(text, list):
-        text = " ".join(str(item) for item in text)
+    return {"current_question": question, "step": step + 1}  # Increment for next time
 
-    # If text is still not a string, convert it
-    if not isinstance(text, str):
-        text = str(text)
 
-    return text.strip()
+def create_simple_workflow():
+    """
+    SIMPLE workflow - no checkpointer complexity.
+    """
+    try:
+        graph = StateGraph(State)
+        graph.add_node("question", question_node)
+        graph.set_entry_point("question")
+        graph.add_edge("question", END)
+        return graph.compile()
+    except Exception as e:
+        logger.exception("Failed to create workflow")
+        raise
 
 
 class InterviewLLM(LLMAdapter):
     """
-    LLM adapter for interview workflow.
+    SIMPLE LLM adapter - manual state tracking, no checkpointer bugs.
     """
 
     def __init__(self, max_steps=5):
-        # Create a simple dummy workflow for the parent class
-        dummy_graph = create_start_workflow()
-        super().__init__(graph=dummy_graph)
+        # Create simple workflow
+        self.workflow = create_simple_workflow()
+        super().__init__(graph=self.workflow)
 
+        # MANUAL state tracking - SIMPLE and RELIABLE
+        self.step = 0
         self.max_steps = max_steps
-        self.state = {
-            "step": 0,
-            "max_steps": max_steps,
-            "current_question": "",
-            "user_response": "",
-            "completed": False,
-        }
-        self.start_workflow = create_start_workflow()
-        self.continue_workflow = create_continue_workflow()
-        self.has_asked_first = False
+        self.completed = False
+        self.has_spoken_first = False
+
+        logger.info(
+            f"InterviewLLM initialized: step={self.step}, max_steps={max_steps}"
+        )
+
+    def _extract_user_text(self, chat_ctx):
+        """Safely extract user text."""
+        if not chat_ctx.items:
+            return ""
+
+        last_msg = chat_ctx.items[-1]
+
+        # Try different message formats
+        if hasattr(last_msg, "content"):
+            text = last_msg.content
+        elif hasattr(last_msg, "text"):
+            text = last_msg.text
+        elif hasattr(last_msg, "message"):
+            text = last_msg.message
+        else:
+            text = str(last_msg)
+
+        # Handle lists
+        if isinstance(text, list):
+            text = " ".join(str(item) for item in text)
+
+        return str(text).strip()
 
     @asynccontextmanager
     async def chat(self, chat_ctx, **kwargs):
         """
-        Handle conversation flow.
+        SIMPLE chat handler - no checkpoint complexity.
         """
         response = ""
 
         try:
-            # First question
-            if not self.has_asked_first:
-                logger.info("Getting first question")
-                result = self.start_workflow.invoke(self.state)
-                self.state.update(result)
-                response = result.get("current_question", "Welcome.")
-                self.has_asked_first = True
+            # FIRST QUESTION: Agent speaks immediately
+            if not self.has_spoken_first:
+                logger.info("FIRST QUESTION - Agent initiating")
 
+                # Run workflow with current step (0)
+                state = {"step": self.step, "current_question": ""}
+                result = await asyncio.to_thread(lambda: self.workflow.invoke(state))
+
+                response = result.get("current_question", "Welcome to the interview.")
+                self.step = result.get("step", 1)  # Update step manually
+                self.has_spoken_first = True
+
+                logger.info(f"First question spoken. New step: {self.step}")
+
+            # SUBSEQUENT QUESTIONS: Process user response
             else:
-                # Get user input using safe extraction
-                user_text = extract_user_text(chat_ctx)
+                # Get user input
+                user_text = self._extract_user_text(chat_ctx)
 
-                if user_text:  # Now user_text is guaranteed to be a string
-                    logger.info(f"User said: {user_text[:50]}...")
-
-                    # Store user response
-                    self.state["user_response"] = user_text
+                if user_text:
+                    logger.info(f"User responded: {user_text[:50]}...")
 
                     # Check if interview is complete
-                    if self.state["step"] >= self.state["max_steps"]:
+                    if self.step >= self.max_steps:
                         response = "Thank you! The interview is now complete."
-                        self.state["completed"] = True
+                        self.completed = True
                     else:
-                        # Get next question
-                        result = self.continue_workflow.invoke(self.state)
-                        self.state.update(result)
-                        response = result.get("current_question", "Next question.")
+                        # Generate next question
+                        state = {"step": self.step, "current_question": ""}
+                        result = await asyncio.to_thread(
+                            lambda: self.workflow.invoke(state)
+                        )
+
+                        response = result.get(
+                            "current_question", "Next question please."
+                        )
+                        self.step = result.get("step", self.step + 1)
+
+                        logger.info(f"Next question generated. New step: {self.step}")
                 else:
-                    logger.info("No user input detected")
-                    response = ""  # Don't respond to empty input
+                    # No user input yet
+                    logger.debug("Waiting for user input...")
+                    response = ""
 
         except Exception as e:
-            logger.exception("Error in LLM chat")
-            response = f"Error: {str(e)[:50]}"
+            logger.exception("Error in simple LLM")
+            response = f"Sorry, I encountered an error."
 
         async def generator():
             if response:
@@ -203,29 +181,20 @@ class InterviewLLM(LLMAdapter):
 
 
 class InterviewAgent(Agent):
-    """Interview agent."""
+    """
+    Simple interview agent.
+    """
 
     def __init__(self):
-        super().__init__(instructions="You are conducting a job interview.")
-
-    async def on_user_turn_completed(self, turn_ctx, new_message):
-        """
-        Optional: Send brief acknowledgment.
-        """
-
-        async def ack_gen():
-            yield "Okay."
-
-        try:
-            await self.session.say(ack_gen(), add_to_chat_ctx=False)
-        except Exception as e:
-            logger.debug(f"Failed to send acknowledgment: {e}")
+        super().__init__(
+            instructions="You are conducting a job interview. Ask one question at a time."
+        )
 
 
 @server.rtc_session(agent_name="voice-agent")
 async def entrypoint(ctx: JobContext):
     """
-    Main entrypoint.
+    Main entrypoint - SIMPLE and RELIABLE.
     """
     try:
         await ctx.connect()
@@ -247,7 +216,7 @@ async def entrypoint(ctx: JobContext):
 
         max_steps = int(metadata.get("max_steps", 5))
 
-        # Create LLM
+        # Create SIMPLE LLM (no checkpoint complexity)
         llm = InterviewLLM(max_steps)
 
         # Create session
@@ -275,27 +244,28 @@ async def entrypoint(ctx: JobContext):
 
         logger.info("Agent session started")
 
-        # Get and speak first question
-        logger.info("Triggering first question...")
+        # TRIGGER FIRST QUESTION
+        await asyncio.sleep(0.5)
 
-        # Create a minimal mock context
-        class MockCtx:
+        # Create empty context
+        class EmptyCtx:
             items = []
 
-        # Get first question
-        async with llm.chat(MockCtx()) as generator:
+        logger.info("Triggering first question...")
+
+        # Get and speak first question
+        async with llm.chat(EmptyCtx()) as generator:
             async for chunk in generator:
                 first_question = chunk
-                logger.info(f"First question: {first_question[:50]}...")
+                logger.info(f"Speaking: {first_question[:50]}...")
 
-                # Speak it
                 async def speak():
                     yield first_question
 
                 await session.say(speak())
                 break
 
-        logger.info("Agent spoke first question successfully")
+        logger.info("First question spoken successfully")
 
     except Exception as e:
         logger.exception("Failed to start agent")
@@ -303,6 +273,7 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
+    # Clear logging
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
