@@ -1,0 +1,37 @@
+[project]
+requires-python = ">=3.11,<3.13"  
+
+name = "your-project"
+version = "0.1.0"
+dependencies = [
+  "fastapi",
+  "uvicorn",
+  "langchain",
+  "langchain-community",
+  "langchain-core",
+  "langchain-google-genai",
+  "chromadb",
+  "torch",
+  "transformers",
+  "sentence-transformers",
+  "sqlalchemy",
+  "psycopg[binary]",
+  "redis",
+  "openai",
+  "google-generativeai",
+  "livekit",
+  "livekit-agents",
+  "livekit-plugins-elevenlabs",
+  "livekit-plugins-assemblyai",
+  "livekit-plugins-google",
+  "livekit-plugins-langchain",
+  "livekit-plugins-silero",
+  "livekit-plugins-noise-cancellation",
+  "livekit-plugins-turn-detector",
+  "livekit-plugins-langchain",
+  "pymupdf>=1.26.7",
+  "langchain-text-splitters>=1.1.0",
+  "tavily-python>=0.7.19",
+  "langgraph-checkpoint-postgres>=3.0.3",
+  "python-multipart>=0.0.22",
+]
