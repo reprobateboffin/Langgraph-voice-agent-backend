@@ -102,6 +102,7 @@ def setup_node(state: Mapping[str, Any]) -> Dict[str, Any]:
         "answers": [],
         "feedback": [],
         "current_question": first_question,
+        "robot_response": first_question,
         "max_steps": state.get("max_steps", 3),
         "waiting_for_user": True,
         "needs_retrieval": False,
@@ -142,6 +143,7 @@ def get_answer_node(state: Mapping[str, Any]) -> Dict[str, Any]:
         "current_answer": answer,
         "messages": new_messages,
         "questions": state.get("questions", []) + [current_q],
+        "robot_response": current_q,
         "answers": state.get("answers", []) + [answer],
         "content": content_list,
     }

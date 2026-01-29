@@ -7,6 +7,7 @@ class InterviewState(TypedDict):
     content: List[str]
     cv_content: str
     user_response: str
+    robot_response: str
     questions: List[str]
     answers: List[str]
     feedback: List[Dict]
