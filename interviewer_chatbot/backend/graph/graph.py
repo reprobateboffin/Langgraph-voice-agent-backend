@@ -13,7 +13,6 @@ from graph.nodes import (
 )
 from utils.logger import setup_logger
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.checkpoint.sqlite import SqliteSaver
 import psycopg
 from langgraph.checkpoint.postgres import PostgresSaver
 from config.settings import settings
@@ -120,13 +119,6 @@ def get_postgres_checkpointer():
     except Exception as e:
         logger.warning("⚠️ PostgreSQL setup failed: %s", e)
 
-    try:
-        import sqlite3
-
-        conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
-        checkpointer = SqliteSaver(conn)
-        logger.info("✅ Using SQLite checkpointer (PostgreSQL fallback)")
-        return checkpointer
     except Exception as e:
         logger.warning("⚠️ SQLite saver failed: %s", e)
 
