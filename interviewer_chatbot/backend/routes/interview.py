@@ -209,12 +209,18 @@ def join_meeting(
         cv_id = save_cv_and_return_id(cv) if cv else None
 
         interview_id = uuid.uuid4().hex[:6]
-
+        thread_id = str(uuid.uuid4())
+        config = {"configurable": {"thread_id": thread_id}}
+        # In interview.py join_meeting endpoint
         metadata = {
             "role": "interviewer",
             "job_title": job_title,
             "question_type": question_type,
             "cv_path": cv_id,
+            "max_steps": 5,  # Add max steps
+            "current_step": 0,  # Start at step 0
+            "interview_id": interview_id,  # Unique interview ID
+            "thread_id": thread_id,
         }
         token = (
             AccessToken(
@@ -228,7 +234,7 @@ def join_meeting(
                     agents=[
                         RoomAgentDispatch(
                             agent_name="voice-agent",
-                            metadata=json.dumps(metadata),
+                            # metadata=json.dumps(metadata),
                         )
                     ]
                 )
