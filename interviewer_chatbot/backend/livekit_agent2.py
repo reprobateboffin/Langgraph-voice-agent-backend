@@ -425,7 +425,7 @@ class LangGraphLLM(LLMAdapter):
 
                     response = result.get("response")
             else:
-                response = self.get_current_response()
+                response = "This first question yo"
 
         except Exception as e:
             logger.exception("Error in chat")
