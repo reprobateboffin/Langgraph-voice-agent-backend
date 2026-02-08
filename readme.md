@@ -208,13 +208,13 @@ All configuration values should be defined in a `.env` file.
 ### FastAPI Server
 
 ```bash
-uvicorn main:app --reload
+uv run uvicorn main:app --reload
 ```
 
 ### LiveKit Agent Worker
 
 ```bash
-python livekit_agent2.py
+uv run livekit_agent2.py
 ```
 
 The LiveKit agent will activate automatically when dispatched to a room via the `/join` endpoint.
