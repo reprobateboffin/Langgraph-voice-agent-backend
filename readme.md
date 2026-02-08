@@ -1,4 +1,4 @@
-# 🧠 Interview Backend – Technical README
+# 🧠 Interview Backend 
 
 This backend implements a **dual-interface AI interview system** consisting of:
 
