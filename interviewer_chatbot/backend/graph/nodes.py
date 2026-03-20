@@ -1,14 +1,18 @@
 import json
 import os
 from typing import Any, Dict, Mapping, List
-
 from utils.logger import setup_logger
-from utils.generation import _safe_generate
+from utils.generation import (
+    _safe_generate,
+    parse_json_answer_feedback,
+    parse_json_final_feedback,
+)
 from services.tavily_client import tavily_service
 from services.gemini_client import gemini_client
-from models.embedding_model import embeddings
+from models.embedding_model import get_embeddings
 from models.final_evaluation import FinalEvaluation
 from config.prompts import (
+    get_answer_evaluation_prompt,
     get_setup_prompt,
     get_question_generation_prompt,
     get_evaluation_prompt,
@@ -20,6 +24,7 @@ import textwrap
 from services.vectorstore_service import load_vectorstore
 
 logger = setup_logger(__name__)
+embeddings = get_embeddings()
 
 
 def decide_retrieval(query: str, user_id: str = "default_user") -> (bool, float):
@@ -101,6 +106,7 @@ def setup_node(state: Mapping[str, Any]) -> Dict[str, Any]:
         "questions": [],
         "answers": [],
         "feedback": [],
+        "first_question": first_question,
         "current_question": first_question,
         "robot_response": first_question,
         "max_steps": state.get("max_steps", 3),
@@ -258,7 +264,8 @@ def generate_question_node(state: Mapping[str, Any]) -> Dict[str, Any]:
     state = dict(state)
     step = state.get("step", 0)
     max_questions = state.get("max_steps", 3)
-    if step >= max_questions:
+    # if step >= max_questions:
+    if len(state["answers"]) >= max_questions:
         return sanitize_state(state)
 
     topic = state.get("topic", "")
@@ -274,7 +281,7 @@ def generate_question_node(state: Mapping[str, Any]) -> Dict[str, Any]:
     else:
         context_sources = ["None"]
 
-    full_content = "\n".join(content_list + context_text)
+    full_content = "\n".join(list(content_list[-4:]) + list(context_text))
     context_str = "\n".join(context_text)
 
     prompt = get_question_generation_prompt(
@@ -308,79 +315,67 @@ def generate_question_node(state: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def evaluate_question_node(state: Mapping[str, Any]) -> Dict[str, Any]:
-    logger.info("✅ Running evaluate_question_node")
+    logger.info("✅ Running final evaluate_question_node")
 
     state = dict(state)
-    questions, answers = state.get("questions", []), state.get("answers", [])
-    if not questions or not answers:
+    questions = state.get("questions", [])
+    answers = state.get("answers", [])
+    logger.info(f"QUESTIONS: {len(questions)}")
+    logger.info(f"ANSWERS: {len(answers)}")
+    if not answers or not questions:
         return sanitize_state(state)
 
+    questions_text = "\n".join(f"{i+1}. Q: {q}" for i, q in enumerate(questions))
+    answers_text = "\n".join(f"{i+1}. A: {a}" for i, a in enumerate(answers))
+
     full_content = "\n".join(state.get("content", []))
-    transcript = "\n".join([f"Q: {q}\nA: {a}" for q, a in zip(questions, answers)])
-    messages_text = "\n".join([m.get("content", "") for m in state.get("messages", [])])
 
-    feedback_list = []
+    parsed_eval = []
 
-    for question, answer in zip(questions, answers):
-        try:
-            q_raw = gemini_client.generate_content(
-                get_evaluation_prompt(
-                    kind="question",
-                    full_messages=messages_text,
-                    full_content=full_content,
-                    transcript=transcript,
-                    last_question=question,
-                    last_answer=answer,
-                )
-            )
-            q_parsed = safe_parse_json(q_raw)
-
-            a_raw = gemini_client.generate_content(
-                get_evaluation_prompt(
-                    kind="answer",
-                    full_messages=messages_text,
-                    full_content=full_content,
-                    transcript=transcript,
-                    last_question=question,
-                    last_answer=answer,
-                )
-            )
-            a_parsed = safe_parse_json(a_raw)
-
-        except Exception as e:
-            logger.error("Evaluation failed: %s", e)
-            q_parsed = {"rating": 6, "feedback": "Good effort."}
-            a_parsed = {"rating": 6, "feedback": "Good effort."}
-
-        feedback_list.append(
-            {"question_feedback": q_parsed, "answer_feedback": a_parsed}
+    try:
+        prompt = get_answer_evaluation_prompt(
+            kind="answer",
+            answers=answers_text,
+            questions=questions_text,
+            full_content=full_content,
         )
-    logger.info(f"✅ Collected {len(feedback_list)} feedback items so far.")
+
+        raw = gemini_client.generate_content(prompt)
+        parsed_eval = parse_json_answer_feedback(raw)
+
+    except Exception as e:
+        logger.error("Evaluation failed: %s", e)
 
     feedback_text = "\n\n".join(
-        f"Q Feedback: {item['question_feedback'].get('feedback', '')}\n"
-        f"A Feedback: {item['answer_feedback'].get('feedback', '')}"
-        for item in feedback_list
+        f"Answer {item['answer_index']} (Rating {item['rating']}):\n{item['feedback']}"
+        for item in parsed_eval
     )
-    logger.debug(f"Feedback text generated:\n{feedback_text}")
 
     new_state = {
         **state,
-        "feedback": feedback_list,
-        "feedback_text": feedback_text.strip(),
-        "step": state.get("step", 0) + 1,
+        "feedback": parsed_eval,
+        "feedback_text": feedback_text,
     }
 
     return sanitize_state(new_state)
 
 
+# from pymongo import MongoClient
+from motor.motor_asyncio import AsyncIOMotorClient
+import os
+
+uri = os.getenv("MONGODB_URI")
+client = AsyncIOMotorClient(uri)
+db = client["interviews_db"]  # auto-created
+collection = db["interviews"]  # auto-created
+
+
 def final_evaluation_node(state: Mapping[str, Any]) -> Dict[str, Any]:
     state = vars(state) if not isinstance(state, dict) else state
 
-    questions, answers, feedback = (
+    questions, answers = (
         state.get("questions", []),
         state.get("answers", []),
-        state.get("feedback", []),
     )
     if not questions or not answers:
         logger.warning("No data for final evaluation.")
@@ -388,34 +383,43 @@ def final_evaluation_node(state: Mapping[str, Any]) -> Dict[str, Any]:
     logger.info("✅ Running final_evaluation_node")
 
     transcript = ""
-    for i in range(len(questions)):
-        fb = feedback[i] if i < len(feedback) else {}
-        transcript += (
-            f"Q{i+1}: {questions[i]}\nA{i+1}: {answers[i]}\n"
-            f"Feedback: {fb.get('answer_feedback', {}).get('feedback', '')}\n\n"
-        )
-
+    transcript = "\n".join(
+        f"{i+1}. Q: {q}\n{i+1}. A: {a}"
+        for i, (q, a) in enumerate(zip(questions, answers))
+    )
     final_prompt = get_final_evaluation_prompt(transcript)
     try:
         raw_final = gemini_client.generate_content(final_prompt)
-        parsed_final = safe_parse_json(raw_final)
+        print(f"what gemini returned: {raw_final}")
+        parsed_final = parse_json_final_feedback(raw_final)
+        print(f"AFTER PARSING: {parsed_final}", type(parsed_final))
     except Exception as e:
         logger.error("Final eval parse failed: %s", e)
         parsed_final = {}
 
-    final_eval = FinalEvaluation(
-        overall_quality=int(parsed_final.get("overall_quality", 7)),
-        strengths=parsed_final.get("strengths", ["Good technical depth"]),
-        areas_for_improvement=parsed_final.get(
-            "areas_for_improvement", ["Elaborate examples"]
-        ),
-        recommendation=parsed_final.get(
-            "recommendation", "Recommended with reservations."
-        ),
-        final_feedback=parsed_final.get("final_feedback", "Solid overall performance."),
-    )
+    try:
+        answer_eval = state.get("feedback", [])
+        result = collection.insert_one(
+            {
+                "final_eval": parsed_final,
+                "answer_eval": answer_eval,
+                "questions": questions,
+                "answers": answers,
+                "user_id": state["user_id"],
+                "interview_id": f"interview{1}",
+            }
+        )
 
-    return {**state, "final_evaluation": final_eval.model_dump()}
+        print("Inserted ID:", result.inserted_id)
+
+        # Quick read
+        print("\nAll interviews:")
+        for note in collection.find().limit(5):
+            print(note)
+    except Exception as e:
+        print(e)
+
+    return {**state, "final_evaluation": parsed_final, "finished": True}
 
 
 def display_results_node(state: Mapping[str, Any]) -> Dict[str, Any]:

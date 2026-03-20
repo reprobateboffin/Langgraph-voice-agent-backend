@@ -7,6 +7,8 @@ GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 LIVEKIT_URL = os.getenv("LIVEKIT_URL")
 DB_URI = os.getenv(
     "DATABASE_URL",
@@ -15,6 +17,7 @@ DB_URI = os.getenv(
 CHROMA_API_KEY = os.getenv("CHROMA_API_KEY")
 CHROMA_TENANT = os.getenv("CHROMA_TENANT")
 CHROMA_DATABASE = os.getenv("CHROMA_DATABASE")
+TAVILY_CHAT_KEY = os.getenv("TAVILY_CHAT_KEY")
 
 gemini_model = os.getenv("GEMINI_MODEL")
 gemini_embedding_model = os.getenv(
@@ -40,6 +43,9 @@ class Settings:
         self.livekit_api_key = LIVEKIT_API_KEY
         self.livekit_url = LIVEKIT_URL
         self.livekit_api_secret = LIVEKIT_API_SECRET
+        self.mistral_api_key = MISTRAL_API_KEY
+        self.groq_api_key = GROQ_API_KEY
+        self.tavily_chat_key = TAVILY_CHAT_KEY
 
 
 settings = Settings()

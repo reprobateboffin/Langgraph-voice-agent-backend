@@ -5,6 +5,8 @@ from typing import Type
 from pydantic import BaseModel, Field, ValidationError
 from models.gemini_model import GeminiModel
 from utils.logger import setup_logger
+from typing import Union, List
+from langchain_core.messages import BaseMessage, AIMessage, HumanMessage
 
 logger = setup_logger(__name__)
 
@@ -65,6 +67,34 @@ class GeminiClient:
                 logger.info(
                     f"Generated content for prompt (length {len(prompt)} chars)"
                 )
+                return response.text.strip() if response.text else ""
+            except Exception as e:
+                logger.exception(f"Gemini API error (attempt {attempt+1}/{retries})")
+                if attempt < retries - 1:
+                    time.sleep(delay)
+                else:
+                    logger.error("Gemini API failed after maximum retries")
+                    return ""
+
+    def generate_content_list(
+        self, prompt: Union[str, List[BaseMessage]], retries: int = 3, delay: int = 5
+    ) -> str:
+        if isinstance(prompt, str):
+            content = prompt
+        else:
+            # Convert LangChain messages → format google genai likes
+            content = []
+            for msg in prompt:
+                role = "user" if isinstance(msg, HumanMessage) else "model"
+                content.append({"role": role, "parts": [{"text": msg.content}]})
+            # If last message is not user, Gemini might complain → ensure it ends with user
+            if not content or content[-1]["role"] != "user":
+                raise ValueError("Conversation must end with a user message")
+
+        for attempt in range(retries):
+            try:
+                response = self.model.generate_content(content)
+                logger.info(f"Generated content (input length: {len(str(content))})")
                 return response.text.strip() if response.text else ""
             except Exception as e:
                 logger.exception(f"Gemini API error (attempt {attempt+1}/{retries})")
