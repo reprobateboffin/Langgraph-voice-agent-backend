@@ -3,10 +3,10 @@ import json
 import logging
 import asyncio
 from contextlib import asynccontextmanager
-from livekit import api
 
 import httpx
 from dotenv import load_dotenv
+from livekit import api
 
 from livekit.agents import (
     Agent,
@@ -20,219 +20,110 @@ from livekit.agents import AgentServer
 from livekit.agents.llm import LLM
 from livekit.plugins import elevenlabs, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from contextlib import asynccontextmanager
-
-# -------------------------------------------------------------------
-# Setup
-# -------------------------------------------------------------------
 
 load_dotenv()
 logger = logging.getLogger("voice-agent")
 logging.basicConfig(level=logging.INFO)
 
 server = AgentServer()
-
 BACKEND_URL = "http://localhost:8000"
 
 
-# -------------------------------------------------------------------
-# Backend API helpers
-# -------------------------------------------------------------------
+# -------------------- API CALLS --------------------
 
 
 async def run_graph_start(initial_state: dict, thread_id: str) -> dict:
-    """
-    Start a new interview session by calling the backend /start_interview endpoint.
-
-    Args:
-        initial_state: Dictionary containing job_title, question_type, cv_text, max_step, etc.
-        thread_id: Unique identifier for this interview thread
-
-    Returns:
-        Parsed JSON response from the backend (should contain the first question, etc.)
-
-    Raises:
-        httpx.HTTPStatusError: If the backend returns 4xx/5xx status
-    """
     async with httpx.AsyncClient(timeout=240) as client:
         r = await client.post(
             f"{BACKEND_URL}/start_interview",
             data={
-                "job_title": initial_state.get("topic"),
-                "question_type": initial_state.get("question_type"),
-                "cv_text": initial_state.get("cv_text"),
-                "max_step": initial_state.get("max_step", "5"),
-                "thread_id": thread_id,
+                "job_title": str(initial_state.get("topic", "")),
+                "question_type": str(initial_state.get("question_type", "")),
+                "cv_text": str(initial_state.get("cv_text", "")),
+                "max_step": str(initial_state.get("max_step", "5")),
+                "thread_id": str(thread_id),
+                "username": str(initial_state.get("username", "Muhammad")),
             },
         )
-        print(r.status_code)
-        print(r.text)
+        print("START:", r.status_code, r.text)
         r.raise_for_status()
         return r.json()
 
 
-from pydantic import BaseModel
-
-
-class ContinueRequest(BaseModel):
-    """Request model for continuing an existing interview session."""
-
-    user_response: str
-    thread_id: str
-
-
-async def run_graph_continue(req: ContinueRequest) -> dict:
-    """
-    Send user's answer to backend and get the next question / evaluation step.
-
-    Args:
-        req: ContinueRequest object containing user's response and thread identifier
-
-    Returns:
-        Parsed JSON response from /continue_interview endpoint
-
-    Raises:
-        httpx.HTTPStatusError: On non-2xx responses from backend
-    """
+async def run_graph_continue(user_response: str, thread_id: str) -> dict:
     async with httpx.AsyncClient(timeout=240) as client:
         r = await client.post(
             f"{BACKEND_URL}/continue_interview",
-            json=req.dict(),
-            timeout=240,
+            json={"user_response": user_response, "thread_id": thread_id},
         )
-        print(r.status_code)
-        print(r.text)
+        print("CONTINUE:", r.status_code, r.text)
         r.raise_for_status()
         return r.json()
 
 
-class SimpleAPILLM(LLM):
-    """
-    Custom LLM adapter that delegates question generation and continuation
-    to an external backend HTTP API instead of using a real language model.
-    """
+# -------------------- LLM --------------------
 
+
+class SimpleAPILLM(LLM):
     def __init__(self, initial_state: dict, thread_id: str):
         super().__init__()
         self.initial_state = initial_state
         self.thread_id = thread_id
+        self.started = False
         self.finished = False
-        self.interview_started = False
 
-    async def get_first_question(self) -> str:
-        """
-        Retrieve the very first interview question from backend.
-
-        Returns:
-            The first question text (or fallback message if failed)
-        """
-        if not self.interview_started:
+    async def get_first_question(self):
+        try:
             result = await run_graph_start(self.initial_state, self.thread_id)
-            print(
-                f'resulting new message is {result.get("message","None retrieved la")}'
-            )
-            self.interview_started = True
+            self.started = True
             return result.get("message", "No question generated.")
-        return ""
+        except Exception as e:
+            print("START ERROR:", e)
+            return "Failed to start interview."
 
     @asynccontextmanager
     async def chat(self, chat_ctx, **kwargs):
-        """
-        Main chat turn handler — sends user response to backend and streams
-        the next interviewer message (or finish message).
-        """
-
         async def stream(msg: str):
             yield msg
 
         try:
-            if not chat_ctx.items:
+            if not chat_ctx.items or not self.started:
                 yield stream("")
                 return
 
-            user_text_raw = chat_ctx.items[-1].content
-            if self.interview_started:
-                if isinstance(user_text_raw, list):
-                    user_text = " ".join(user_text_raw)
-                else:
-                    user_text = str(user_text_raw)
+            user_text = str(chat_ctx.items[-1].content)
+            result = await run_graph_continue(user_text, self.thread_id)
 
-                req = ContinueRequest(
-                    user_response=user_text,
-                    thread_id=self.thread_id,
-                )
-
-                result = await run_graph_continue(req)
-                current_step = result.get("current_step", 1)
-                current_status = result.get("status", "unfinished")
-                max_step = result.get("max_steps", 5)
-
-                if not result.get("finished"):
-                    message = result.get("message", "I didn't get a response.")
-                    yield stream(message)
-                else:
-                    yield stream(
-                        "The interview has finished, you will be redirected to results page soon"
-                    )
-                    await asyncio.sleep(20)
-                    self.finished = True
+            if result.get("finished"):
+                yield stream("Interview finished.")
+                self.finished = True
+            else:
+                yield stream(result.get("message", "No response."))
 
         except Exception as e:
-            logger.exception("LLM chat failed")
-            yield stream("Sorry, something went wrong. Please try again.")
+            logger.exception("CHAT ERROR")
+            yield stream("Something went wrong.")
+
+
+# -------------------- AGENT --------------------
 
 
 class VoiceAgent(Agent):
-    """
-    Minimal agent subclass that adds a thinking filler phrase
-    before the real answer is generated.
-    """
-
     def __init__(self):
-        super().__init__(instructions="You are a professional technical interviewer.")
+        super().__init__(instructions="You are a technical interviewer.")
 
     async def on_user_turn_completed(self, turn_ctx, new_message):
-        """
-        Called after user finishes speaking → plays a short "thinking" filler.
-        """
-
         async def filler():
-            yield "Okay, let me think about that."
+            yield "Let me think..."
 
-        try:
-            await self.session.say(filler(), add_to_chat_ctx=False)
-        except Exception:
-            logger.exception("Failed to send filler response")
+        await self.session.say(filler(), add_to_chat_ctx=False)
 
 
-async def destroy_room(room_name: str) -> None:
-    """
-    Delete the LiveKit room using the management API.
-
-    Args:
-        room_name: Name of the room to delete
-    """
-    lk = api.LiveKitAPI(
-        url=os.getenv("LIVEKIT_URL"),
-        api_key=os.getenv("LIVEKIT_API_KEY"),
-        api_secret=os.getenv("LIVEKIT_API_SECRET"),
-    )
-
-    await lk.room.delete_room(api.DeleteRoomRequest(room=room_name))
+# -------------------- ENTRYPOINT --------------------
 
 
 @server.rtc_session(agent_name="voice-agent")
 async def entrypoint(ctx: JobContext):
-    """
-    Main entry point for each LiveKit room / interview session.
-
-    Responsibilities:
-    - Connect to room
-    - Parse job metadata
-    - Initialize custom LLM + voice pipeline
-    - Ask first question
-    - Monitor interview completion and clean up room
-    """
     await ctx.connect()
 
     raw_meta = getattr(ctx.job, "metadata", None)
@@ -240,17 +131,18 @@ async def entrypoint(ctx: JobContext):
     if raw_meta:
         meta = json.loads(raw_meta)
         initial_state = meta.get("initial_state", {})
+        thread_id = initial_state.get("thread_id", f"room-{ctx.room.name}")
     else:
+        thread_id = f"room-{ctx.room.name}"
         initial_state = {
-            "topic": "water on mars",
-            "question_type": "broad follow up",
+            "topic": "fallback",
+            "question_type": "general",
             "cv_text": "",
-            "max_step": 5,
+            "max_step": "5",
+            "thread_id": thread_id,
         }
 
-    llm = SimpleAPILLM(
-        initial_state=initial_state, thread_id=f"interview-{ctx.room.name}"
-    )
+    llm = SimpleAPILLM(initial_state, thread_id)
 
     session = AgentSession(
         llm=llm,
@@ -262,7 +154,6 @@ async def entrypoint(ctx: JobContext):
         ),
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
-        preemptive_generation=True,
     )
 
     await session.start(
@@ -274,31 +165,24 @@ async def entrypoint(ctx: JobContext):
     )
 
     async def speak_first():
-        question = await llm.get_first_question()
-        yield question
+        yield await llm.get_first_question()
 
     await session.say(speak_first(), add_to_chat_ctx=False)
 
-    logger.info(f"Voice agent started in room: {ctx.room.name}")
-
-    async def monitor_interview():
-        """
-        Background task that watches for interview completion
-        and destroys the room when finished.
-        """
+    async def monitor():
         while True:
             await asyncio.sleep(1)
             if llm.finished:
-                await destroy_room(ctx.room.name)
+                lk = api.LiveKitAPI(
+                    url=os.getenv("LIVEKIT_URL"),
+                    api_key=os.getenv("LIVEKIT_API_KEY"),
+                    api_secret=os.getenv("LIVEKIT_API_SECRET"),
+                )
+                await lk.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
                 break
 
-    asyncio.create_task(monitor_interview())
+    asyncio.create_task(monitor())
 
 
 if __name__ == "__main__":
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            agent_name="voice-agent",
-        )
-    )
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="voice-agent"))
