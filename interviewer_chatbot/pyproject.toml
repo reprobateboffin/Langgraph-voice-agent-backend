@@ -34,4 +34,7 @@ dependencies = [
   "tavily-python>=0.7.19",
   "langgraph-checkpoint-postgres>=3.0.3",
   "python-multipart>=0.0.22",
+  "argon2-cffi>=25.1.0",
+  "pymongo>=4.16.0",
+  "fastapi-mail>=1.6.2",
 ]
