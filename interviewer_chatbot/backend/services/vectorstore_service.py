@@ -1,13 +1,14 @@
 from chromadb.api.models.Collection import Collection
 import chromadb
-from models.embedding_model import embeddings
 import logging
 from typing import Optional
 from langchain_core.documents import Document
 import os
 from config.settings import settings
+from models.embedding_model import get_embeddings
 
 logger = logging.getLogger(__name__)
+embeddings = get_embeddings()
 
 CHROMA_API_KEY = settings.chroma_api_key
 CHROMA_TENANT = settings.chroma_tenant
