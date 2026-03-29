@@ -12,12 +12,11 @@ from langserve import add_routes
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Or ["http://localhost:5173"] for your React dev server
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["http://localhost:5173"],  # NO trailing slash, NO wildcard "*"
+    allow_credentials=True,  # This MUST be True for cookies
+    allow_methods=["POST", "GET", "OPTIONS"],  # Explicitly list or use ["*"]
+    allow_headers=["Content-Type", "Set-Cookie"],  # Explicitly list or use ["*"]
 )
-
 app.include_router(interview_router)
 app.include_router(auth_router)
 
