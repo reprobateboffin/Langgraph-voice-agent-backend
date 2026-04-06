@@ -18,8 +18,9 @@ from livekit.agents import (
 )
 from livekit.agents import AgentServer
 from livekit.agents.llm import LLM
-from livekit.plugins import elevenlabs, silero, noise_cancellation
+from livekit.plugins import elevenlabs, silero, noise_cancellation, simli
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from config.settings import settings
 
 load_dotenv()
 logger = logging.getLogger("voice-agent")
@@ -33,6 +34,13 @@ BACKEND_URL = "http://localhost:8000"
 
 
 async def run_graph_start(initial_state: dict, thread_id: str) -> dict:
+    interview_id = str(
+        thread_id[5]
+        + initial_state.get("topic", "no topic")
+        + initial_state.get("thread_id", "thread1")[5]
+        + initial_state.get("username", "John Doe")
+    )
+
     async with httpx.AsyncClient(timeout=240) as client:
         r = await client.post(
             f"{BACKEND_URL}/start_interview",
@@ -43,6 +51,9 @@ async def run_graph_start(initial_state: dict, thread_id: str) -> dict:
                 "max_step": str(initial_state.get("max_step", "5")),
                 "thread_id": str(thread_id),
                 "username": str(initial_state.get("username", "Muhammad")),
+                "isCompany": bool(initial_state.get("isCompany", False)),
+                "interview_id": interview_id,
+                "company_name": str(initial_state.get("company_name", "None")),
             },
         )
         print("START:", r.status_code, r.text)
@@ -155,24 +166,44 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
     )
-
+    simli_avatar = simli.AvatarSession(
+        simli_config=simli.SimliConfig(
+            api_key="m6543fvgfdd43luvxs859",
+            face_id="0c2b8b04-5274-41f1-a21c-d5c98322efa9",
+        ),
+    )
+    try:
+        await simli_avatar.start(session, room=ctx.room)
+        logger.info("✅ Simli avatar started successfully")
+    except Exception as e:
+        logger.error(f"❌ Simli avatar failed to start: {type(e).__name__}: {e}")
+        logger.warning("Continuing with voice-only agent (no avatar video)")
+        # Do NOT raise — so the interview can still work with audio    await asyncio.sleep(2)  # ← Add this line (1.5–3 seconds)
     await session.start(
         agent=VoiceAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),
         ),
+        # Correct way to disable agent's audio output (Simli will publish audio instead)
     )
+    await asyncio.sleep(2.0)
 
-    async def speak_first():
-        yield await llm.get_first_question()
+    # Speak the first question reliably
+    try:
+        first_message = await llm.get_first_question()
+        logger.info(f"First question: {first_message[:150]}...")
 
-    await session.say(speak_first(), add_to_chat_ctx=False)
+        await session.say(first_message, add_to_chat_ctx=False)
+        logger.info("✅ First message delivered to user")
+    except Exception as e:
+        logger.error(f"Error speaking first message: {e}")
 
     async def monitor():
         while True:
             await asyncio.sleep(1)
             if llm.finished:
+                await simli_avatar.stop()  # clean up
                 lk = api.LiveKitAPI(
                     url=os.getenv("LIVEKIT_URL"),
                     api_key=os.getenv("LIVEKIT_API_KEY"),
