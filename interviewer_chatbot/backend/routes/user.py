@@ -1,6 +1,7 @@
-from fastapi import FastAPI, Response, HTTPException, APIRouter
+from typing import List, Optional
+from fastapi import FastAPI, Response, HTTPException, APIRouter, Body
 from utils.auth import hash_password, verify_password, create_token
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from config.settings import settings
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
@@ -9,6 +10,8 @@ router = APIRouter(tags=["user"])
 LIVEKIT_API_KEY = settings.livekit_api_key
 LIVEKIT_API_SECRET = settings.livekit_api_secret
 LIVEKIT_URL = settings.livekit_url
+MAIL_USERNAME = settings.mail_username
+MAIL_PASSWORD = settings.mail_password
 
 
 class UserRegister(BaseModel):
@@ -18,9 +21,11 @@ class UserRegister(BaseModel):
 
 
 uri = os.getenv("MONGODB_URI")
+
 client = AsyncIOMotorClient(uri)
 db = client["interviews_db"]  # auto-created
 users_collection = db["user"]  # auto-created
+interview_collection = db["interviews"]
 
 
 @router.post("/register")
@@ -185,6 +190,56 @@ async def login(user_data: UserLogin, response: Response):
     )
 
     return {"message": "Login successful", "username": user["username"]}
+
+
+from typing import List, Optional
+from pydantic import BaseModel, Field
+
+
+# 1. Create a class for the request body
+class InterviewRequest(BaseModel):
+    user_id: str
+    interview_id: Optional[str] = None
+    type: str
+
+
+@router.post("/get-interviews")
+async def get_interviews(request: InterviewRequest):  # <--- Use the model here
+    # Access data using request.user_id
+    if request.type == "user":
+        query = {"user_id": request.user_id}
+    else:
+        query = {"company_name": request.user_id}
+
+    # Only return specific fields
+    projection = {"_id": 1, "interview_id": 1, "user_id": 1, "createdAt": 1}
+
+    cursor = interview_collection.find(query, projection)
+    interviews = await cursor.to_list(length=100)
+
+    for item in interviews:
+        item["_id"] = str(item["_id"])
+
+    return interviews
+
+
+class InterviewByIdRequest(BaseModel):
+    interview_id: str
+
+
+@router.post("/get-interview-results")
+async def get_interview_results(request: InterviewByIdRequest):
+    query = {"interview_id": request.interview_id}
+
+    interview = await interview_collection.find_one(query)
+
+    if not interview:
+        return {"message": "Interview not found"}
+
+    # Convert ObjectId to string
+    interview["_id"] = str(interview["_id"])
+
+    return interview
 
 
 @router.post("/login-org")

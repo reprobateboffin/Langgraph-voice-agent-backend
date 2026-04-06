@@ -14,7 +14,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],  # NO trailing slash, NO wildcard "*"
     allow_credentials=True,  # This MUST be True for cookies
-    allow_methods=["POST", "GET", "OPTIONS"],  # Explicitly list or use ["*"]
+    allow_methods=["POST", "GET", "OPTIONS", "DELETE"],  # Explicitly list or use ["*"]
     allow_headers=["Content-Type", "Set-Cookie"],  # Explicitly list or use ["*"]
 )
 app.include_router(interview_router)

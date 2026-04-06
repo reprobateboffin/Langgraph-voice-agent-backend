@@ -31,3 +31,6 @@ class InterviewState(TypedDict):
     waiting_for_user: bool
     feedback_text: str
     finished: bool
+    isCompany: bool
+    company_name: str
+    interview_id: str

@@ -363,6 +363,7 @@ def evaluate_question_node(state: Mapping[str, Any]) -> Dict[str, Any]:
 # from pymongo import MongoClient
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+from datetime import datetime, timezone
 
 uri = os.getenv("MONGODB_URI")
 client = AsyncIOMotorClient(uri)
@@ -399,6 +400,13 @@ def final_evaluation_node(state: Mapping[str, Any]) -> Dict[str, Any]:
 
     try:
         answer_eval = state.get("feedback", [])
+        is_company = state.get("isCompany", False)
+
+        interview_id = state.get("interview_id", "nnnooo")
+        if is_company:
+            company_name = state.get("company_name", "NoneFound")
+        else:
+            company_name = "personal_use"
         result = collection.insert_one(
             {
                 "final_eval": parsed_final,
@@ -406,7 +414,10 @@ def final_evaluation_node(state: Mapping[str, Any]) -> Dict[str, Any]:
                 "questions": questions,
                 "answers": answers,
                 "user_id": state["user_id"],
-                "interview_id": f"interview{1}",
+                "interview_id": interview_id,
+                "isCompany": is_company,
+                "createdAt": datetime.now(timezone.utc),
+                "company_name": company_name,
             }
         )
 

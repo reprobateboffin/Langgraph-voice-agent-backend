@@ -1514,9 +1514,6 @@ wheels = [
 codecs = [
     { name = "numpy" },
 ]
-simli = [
-    { name = "livekit-plugins-simli" },
-]
 
 [[package]]
 name = "livekit-api"
@@ -3750,13 +3747,13 @@ dependencies = [
     { name = "langgraph-checkpoint-postgres" },
     { name = "langserve", extra = ["all"] },
     { name = "livekit" },
-    { name = "livekit-agents", extra = ["simli"] },
     { name = "livekit-plugins-assemblyai" },
     { name = "livekit-plugins-elevenlabs" },
     { name = "livekit-plugins-google" },
     { name = "livekit-plugins-langchain" },
     { name = "livekit-plugins-noise-cancellation" },
     { name = "livekit-plugins-silero" },
+    { name = "livekit-plugins-simli" },
     { name = "livekit-plugins-turn-detector" },
     { name = "motor" },
     { name = "openai" },
@@ -3792,13 +3789,13 @@ requires-dist = [
     { name = "langgraph-checkpoint-postgres", specifier = ">=3.0.3" },
     { name = "langserve", extras = ["all"], specifier = ">=0.3.3" },
     { name = "livekit" },
-    { name = "livekit-agents", extras = ["simli"], specifier = "~=1.2" },
     { name = "livekit-plugins-assemblyai" },
     { name = "livekit-plugins-elevenlabs" },
     { name = "livekit-plugins-google" },
     { name = "livekit-plugins-langchain" },
     { name = "livekit-plugins-noise-cancellation" },
     { name = "livekit-plugins-silero" },
+    { name = "livekit-plugins-simli", specifier = ">=1.3.12" },
     { name = "livekit-plugins-turn-detector" },
     { name = "motor", specifier = ">=3.7.1" },
     { name = "openai" },

@@ -8,7 +8,10 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+SIMLI_API_KEY = os.getenv("SIMLI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+MAIL_USERNAME = os.getenv("MAIL_USERNAME", "Akbar@gmail.com")
+MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "22hf fjfb fjnd")
 LIVEKIT_URL = os.getenv("LIVEKIT_URL")
 DB_URI = os.getenv(
     "DATABASE_URL",
@@ -46,6 +49,9 @@ class Settings:
         self.mistral_api_key = MISTRAL_API_KEY
         self.groq_api_key = GROQ_API_KEY
         self.tavily_chat_key = TAVILY_CHAT_KEY
+        self.mail_username = MAIL_USERNAME
+        self.mail_password = MAIL_PASSWORD
+        self.simli_api_key = SIMLI_API_KEY
 
 
 settings = Settings()
