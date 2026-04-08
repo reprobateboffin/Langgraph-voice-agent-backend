@@ -3,7 +3,7 @@ import json
 from fastapi import APIRouter, Form, File, UploadFile, HTTPException
 from pydantic import BaseModel
 import uuid
-from typing import Optional
+from typing import List, Optional
 from livekit.api import (
     AccessToken,
     VideoGrants,
@@ -154,7 +154,7 @@ uri = os.getenv("MONGODB_URI")
 client = AsyncIOMotorClient(uri)
 db = client["interviews_db"]  # auto-created
 rooms_collection = db["rooms"]  # auto-created
-
+characters_collection = db["characters"]
 from datetime import datetime, timedelta, timezone
 
 
@@ -167,6 +167,8 @@ async def register_room(
     cv: UploadFile | None = File(None),
     max_step: str = Form(...),
     company_name: Optional[str] = Form(None),
+    voice_id: Optional[str] = Form(None),  # ← Changed to Optional + default None
+    face_id: Optional[str] = Form(None),  # ← Changed to Optional + default None
 ):
     # Store the settings for this specific room
     try:
@@ -193,6 +195,8 @@ async def register_room(
             "isCompany": isCompany,
             "company_name": company_name,
             "createdAt": datetime.now(timezone.utc),
+            "voice_id": voice_id,
+            "face_id": face_id,
         }
     )
     return {"status": "registered in database"}
@@ -236,6 +240,38 @@ async def delete_room(payload: DeleteRoomRequest):
     except Exception as e:
         print("Error deleting room:", e)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+class CharacterResponse(BaseModel):
+    id: str
+    name: str
+    image: str
+    voice_id: str
+    face_id: str
+
+
+@router.get("/characters", response_model=List[CharacterResponse])
+async def get_characters():
+    """
+    Returns all available interviewer characters from MongoDB.
+    """
+    try:
+        cursor = characters_collection.find({})
+        characters = await cursor.to_list(length=100)
+
+        return [
+            {
+                "id": str(char["_id"]),
+                "name": char.get("name", ""),
+                "image": char.get("image", ""),
+                "voice_id": char.get("voice_id", "custom_id"),
+                "face_id": char.get("face_id", "custom_face_id"),
+            }
+            for char in characters
+        ]
+    except Exception as e:
+        print("CHARACTERS FETCH ERROR:", e)
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
 from fastapi import HTTPException
@@ -357,6 +393,9 @@ async def join_meeting(
     job_title = room.get("job_title")
     question_type = room.get("question_type")
     max_step = room.get("max_step")
+    face_id = room.get("face_id")
+
+    voice_id = room.get("voice_id")
     if is_company_bool:
         company_name = room.get("company_name")
     # Validate required fields
@@ -388,6 +427,8 @@ async def join_meeting(
                 "isCompany": is_company_bool,
                 "room_name": room_name,
                 "company_name": company_name,
+                "face_id": face_id,
+                "voice_id": voice_id,
             }
         }
 
