@@ -4,6 +4,11 @@ from typing import Any, Dict
 import json
 from services.gemini_client import gemini_client
 from utils.prompt_template import safe_prompt
+from google.genai.errors import ServerError  # adjust import if needed
+import logging
+from services.mistral_client import mistral_client
+from services.grok_client import groq_client
+
 
 logger = logging.getLogger(__name__)
 
@@ -19,12 +24,68 @@ def safe_text(text: str, max_len: int = 2000) -> str:
     return sanitized[:max_len]
 
 
-def _safe_generate(prompt: str, fallback: str, gemini_client=gemini_client) -> str:
-    try:
-        return gemini_client.generate_content(prompt) or fallback
-    except Exception as e:
-        logger.error("Generation failed: %s", e)
-        return fallback
+# def _safe_generate(prompt: str, fallback: str, gemini_client=gemini_client) -> str:
+#     try:
+#         return mistral_client.generate_content(prompt) or fallback
+#     except Exception as e:
+#         logger.error("Generation failed: %s", e)
+#         return fallback
+
+
+# Corrected _safe_generate function
+# def _safe_generate(prompt: str, fallback: str, gemini_client=None) -> str:
+#     try:
+#         # Mistral client returns string directly
+#         response = groq_client.generate_content(prompt)
+#         # Ensure we return a non-empty string
+#         if response and response.strip():
+#             return response.strip()
+#         return fallback
+#     except Exception as e:
+#         logger.error("Generation failed: %s", e)
+#         return fallback
+
+
+def _safe_generate(
+    prompt: str,
+    fallback: str = "",
+    gemini_client=gemini_client,
+    mistral_client=mistral_client,
+    groq_client=groq_client,
+) -> str:
+    if gemini_client:
+        try:
+            response = gemini_client.generate_content(prompt)
+
+            if response:
+                return response
+        except Exception as e:
+            logger.warning("Gemini failed: %s", e)
+
+    if groq_client:
+        try:
+            response = groq_client.generate_content(prompt)
+            if response:
+                return response
+        except Exception as e:
+            logger.warning("Groq failed: %s", e)
+    # 2️⃣ Mistral
+
+    # 1️⃣ Gemini
+    if mistral_client:
+        try:
+            response = mistral_client.generate_content(prompt)
+
+            if response:
+                return response
+        except Exception as e:
+            logger.warning("Mistral failed, falling back: %s", e)
+
+    # 3️⃣ Groq
+
+    # 4️⃣ Fallback
+    logger.warning("All providers failed")
+    return fallback
 
 
 def safe_parse_json(response: Any) -> Dict[str, Any]:

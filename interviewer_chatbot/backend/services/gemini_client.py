@@ -7,6 +7,7 @@ from models.gemini_model import GeminiModel
 from utils.logger import setup_logger
 from typing import Union, List
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage
+from tenacity import retry, stop_after_attempt
 
 logger = setup_logger(__name__)
 
@@ -49,6 +50,8 @@ class GeminiClient:
         """
         self.model = GeminiModel
 
+    # Example: only 1 attempt
+    @retry(stop=stop_after_attempt(1))
     def generate_content(self, prompt: str, retries: int = 3, delay: int = 5) -> str:
         """
         Generates text content from Gemini LLM for a given prompt.
@@ -72,6 +75,8 @@ class GeminiClient:
                 logger.exception(f"Gemini API error (attempt {attempt+1}/{retries})")
                 if attempt < retries - 1:
                     time.sleep(delay)
+                if "503" in str(e) or "UNAVAILABLE" in str(e):
+                    raise RuntimeError("GEMINI_OVERLOADED")
                 else:
                     logger.error("Gemini API failed after maximum retries")
                     return ""
