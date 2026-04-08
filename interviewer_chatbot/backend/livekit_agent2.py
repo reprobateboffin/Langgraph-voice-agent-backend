@@ -28,7 +28,7 @@ logger = logging.getLogger("voice-agent")
 logging.basicConfig(level=logging.INFO)
 
 server = AgentServer()
-BACKEND_URL = "http://localhost:8000"
+BACKEND_URL = settings.backend_url
 
 
 # -------------------- API CALLS --------------------

@@ -26,6 +26,7 @@ gemini_model = os.getenv("GEMINI_MODEL")
 gemini_embedding_model = os.getenv(
     "GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001"
 )
+BACKEND_URL = os.getenv("BACKEND_URL")
 
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY not found in environment variables!")
@@ -52,6 +53,7 @@ class Settings:
         self.mail_username = MAIL_USERNAME
         self.mail_password = MAIL_PASSWORD
         self.simli_api_key = SIMLI_API_KEY
+        self.backend_url = BACKEND_URL
 
 
 settings = Settings()
