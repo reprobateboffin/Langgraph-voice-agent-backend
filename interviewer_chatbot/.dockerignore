@@ -20,3 +20,39 @@ coverage.xml
 *.log
 .DS_Store
 .env
+# Python
+.venv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Node (if any frontend exists)
+node_modules/
+
+# Git
+.git
+.gitignore
+
+# Env files
+.env
+
+# OS junk
+.DS_Store
+
+# Logs
+*.log
+
+# Uploaded files / temp
+uploads/
+tmp/
+data/
+
+# Cache
+.cache/
+.mypy_cache/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
