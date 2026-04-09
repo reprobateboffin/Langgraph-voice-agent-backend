@@ -1,6 +1,6 @@
 import os
 from groq import Groq
-from config.settings import settings
+from settings import settings
 
 # Set the environment variable GROQ_API_KEY before running the script
 client = Groq(

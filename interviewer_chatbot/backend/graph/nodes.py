@@ -8,7 +8,6 @@ from utils.generation import (
     parse_json_final_feedback,
 )
 from services.tavily_client import tavily_service
-from services.gemini_client import gemini_client
 from models.embedding_model import get_embeddings
 from models.final_evaluation import FinalEvaluation
 from config.prompts import (
@@ -331,16 +330,17 @@ def evaluate_question_node(state: Mapping[str, Any]) -> Dict[str, Any]:
     full_content = "\n".join(state.get("content", []))
 
     parsed_eval = []
-
+    prompt = get_answer_evaluation_prompt(
+        kind="answer",
+        answers=answers_text,
+        questions=questions_text,
+        full_content=full_content,
+    )
     try:
-        prompt = get_answer_evaluation_prompt(
-            kind="answer",
-            answers=answers_text,
-            questions=questions_text,
-            full_content=full_content,
-        )
 
-        raw = gemini_client.generate_content(prompt)
+        # raw = gemini_client.generate_content(prompt)
+        raw = _safe_generate(prompt)
+
         parsed_eval = parse_json_answer_feedback(raw)
 
     except Exception as e:
@@ -390,7 +390,8 @@ def final_evaluation_node(state: Mapping[str, Any]) -> Dict[str, Any]:
     )
     final_prompt = get_final_evaluation_prompt(transcript)
     try:
-        raw_final = gemini_client.generate_content(final_prompt)
+        # raw_final = gemini_client.generate_content(final_prompt)
+        raw_final = _safe_generate(final_prompt)
         print(f"what gemini returned: {raw_final}")
         parsed_final = parse_json_final_feedback(raw_final)
         print(f"AFTER PARSING: {parsed_final}", type(parsed_final))

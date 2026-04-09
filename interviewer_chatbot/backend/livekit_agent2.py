@@ -157,104 +157,6 @@ class VoiceAgent(Agent):
 # -------------------- ENTRYPOINT --------------------
 
 
-# @server.rtc_session(agent_name="voice-agent")
-# async def entrypoint(ctx: JobContext):
-#     await ctx.connect()
-
-#     raw_meta = getattr(ctx.job, "metadata", None)
-
-#     if raw_meta:
-#         meta = json.loads(raw_meta)
-#         initial_state = meta.get("initial_state", {})
-#         thread_id = initial_state.get("thread_id", f"room-{ctx.room.name}")
-#     else:
-#         thread_id = f"room-{ctx.room.name}"
-#         initial_state = {
-#             "topic": "fallback",
-#             "question_type": "general",
-#             "cv_text": "",
-#             "max_step": "5",
-#             "thread_id": thread_id,
-#         }
-
-#     llm = SimpleAPILLM(initial_state, thread_id)
-
-#     voice_id = initial_state.get("voice_id", "CwhRBWXzGAHq8TQ4Fs17")
-#     face_id = initial_state.get("face_id", "0c2b8b04-5274-41f1-a21c-d5c98322efa9")
-#     session = AgentSession(
-#         llm=llm,
-#         stt="assemblyai/universal-streaming:en",
-#         tts=elevenlabs.TTS(
-#             model="eleven_v2_flash",
-#             voice_id=voice_id,
-#             api_key=os.getenv("ELEVENLABS_API_KEY"),
-#         ),
-#         vad=silero.VAD.load(),
-#         turn_detection=MultilingualModel(),
-#     )
-#     simli_avatar = simli.AvatarSession(
-#         simli_config=simli.SimliConfig(
-#             api_key=os.getenv("SIMLI_API_KEY"),
-#             face_id=face_id,
-#         ),
-#     )
-#     try:
-#         await simli_avatar.start(session, room=ctx.room)
-
-#         # Add right after starting the avatar
-#         async def simple_keep_alive():
-#             while True:
-#                 await asyncio.sleep(4)
-#                 try:
-#                     # This sends a tiny update to keep connection alive
-#                     await simli_avatar.update_expression("neutral")
-#                 except:
-#                     pass
-
-#         asyncio.create_task(simple_keep_alive())
-#         logger.info("✅ Simli avatar started successfully")
-#     except Exception as e:
-#         logger.error(f"❌ Simli avatar failed to start: {type(e).__name__}: {e}")
-#         logger.warning("Continuing with voice-only agent (no avatar video)")
-#         # Do NOT raise — so the interview can still work with audio    await asyncio.sleep(2)  # ← Add this line (1.5–3 seconds)
-#     await session.start(
-#         agent=VoiceAgent(),
-#         room=ctx.room,
-#         room_input_options=RoomInputOptions(
-#             noise_cancellation=noise_cancellation.BVC(),
-#         ),
-#         # Correct way to disable agent's audio output (Simli will publish audio instead)
-#     )
-#     await asyncio.sleep(2.0)
-
-#     # Speak the first question reliably
-#     try:
-#         first_message = await llm.get_first_question()
-#         logger.info(f"First question: {first_message[:150]}...")
-
-#         await session.say(first_message, add_to_chat_ctx=False)
-#         logger.info("✅ First message delivered to user")
-#     except Exception as e:
-#         logger.error(f"Error speaking first message: {e}")
-
-#     async def monitor():
-#         while True:
-#             await asyncio.sleep(1)
-#             if llm.finished:
-#                 ctx.shutdown()
-
-#                 # await simli_avatar.stop()  # clean up
-#                 lk = api.LiveKitAPI(
-#                     url=os.getenv("LIVEKIT_URL"),
-#                     api_key=os.getenv("LIVEKIT_API_KEY"),
-#                     api_secret=os.getenv("LIVEKIT_API_SECRET"),
-#                 )
-#                 await lk.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
-#                 break
-
-#     asyncio.create_task(monitor())
-
-
 @server.rtc_session(agent_name="voice-agent")
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
@@ -279,7 +181,6 @@ async def entrypoint(ctx: JobContext):
 
     voice_id = initial_state.get("voice_id", "CwhRBWXzGAHq8TQ4Fs17")
     face_id = initial_state.get("face_id", "0c2b8b04-5274-41f1-a21c-d5c98322efa9")
-
     session = AgentSession(
         llm=llm,
         stt="assemblyai/universal-streaming:en",
@@ -291,116 +192,215 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
     )
-
     simli_avatar = simli.AvatarSession(
         simli_config=simli.SimliConfig(
             api_key=os.getenv("SIMLI_API_KEY"),
             face_id=face_id,
         ),
     )
-
-    tasks = []
-    running = True
-    is_cleaned = False
-
-    # -------------------- CLEANUP + SHUTDOWN --------------------
-    async def cleanup_and_shutdown():
-        nonlocal running, is_cleaned
-
-        if is_cleaned:
-            return
-        is_cleaned = True
-        running = False
-
-        logger.info("🧹 Cleaning up and shutting down...")
-
-        # Cancel background tasks
-        for t in tasks:
-            t.cancel()
-
-        # Stop avatar
-        try:
-            await simli_avatar.stop()
-            logger.info("✅ Avatar stopped")
-        except Exception:
-            pass
-
-        # Delete room safely
-        try:
-            lk = api.LiveKitAPI(
-                url=os.getenv("LIVEKIT_URL"),
-                api_key=os.getenv("LIVEKIT_API_KEY"),
-                api_secret=os.getenv("LIVEKIT_API_SECRET"),
-            )
-            await lk.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
-            logger.info("🗑️ Room deleted")
-        except Exception as e:
-            logger.warning(f"Room deletion failed: {e}")
-
-        ctx.shutdown()
-
-    # -------------------- DISCONNECT HANDLER --------------------
-    def on_disconnect(participant):
-        logger.info(f"⚠️ Participant disconnected: {participant.identity}")
-        asyncio.create_task(cleanup_and_shutdown())
-
-    ctx.room.on("participant_disconnected", on_disconnect)
-
-    # -------------------- START AVATAR --------------------
     try:
         await simli_avatar.start(session, room=ctx.room)
-        logger.info("✅ Simli avatar started")
 
-        async def keep_alive():
-            while running:
+        # Add right after starting the avatar
+        async def simple_keep_alive():
+            while True:
                 await asyncio.sleep(4)
                 try:
-                    if ctx.room.connection_state == "connected":
-                        await simli_avatar.update_expression("neutral")
-                    else:
-                        break
-                except Exception:
-                    break
+                    # This sends a tiny update to keep connection alive
+                    await simli_avatar.update_expression("neutral")
+                except:
+                    pass
 
-        tasks.append(asyncio.create_task(keep_alive()))
-
+        asyncio.create_task(simple_keep_alive())
+        logger.info("✅ Simli avatar started successfully")
     except Exception as e:
-        logger.error(f"❌ Avatar failed: {e}")
-        logger.warning("Continuing with voice-only mode")
-
-    # -------------------- START SESSION --------------------
+        logger.error(f"❌ Simli avatar failed to start: {type(e).__name__}: {e}")
+        logger.warning("Continuing with voice-only agent (no avatar video)")
+        # Do NOT raise — so the interview can still work with audio    await asyncio.sleep(2)  # ← Add this line (1.5–3 seconds)
     await session.start(
         agent=VoiceAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),
         ),
+        # Correct way to disable agent's audio output (Simli will publish audio instead)
     )
-
     await asyncio.sleep(2.0)
 
-    # -------------------- FIRST QUESTION --------------------
+    # Speak the first question reliably
     try:
         first_message = await llm.get_first_question()
         logger.info(f"First question: {first_message[:150]}...")
 
         await session.say(first_message, add_to_chat_ctx=False)
-        logger.info("✅ First message sent")
-
+        logger.info("✅ First message delivered to user")
     except Exception as e:
-        logger.error(f"❌ First message error: {e}")
+        logger.error(f"Error speaking first message: {e}")
 
-    # -------------------- MONITOR INTERVIEW --------------------
     async def monitor():
-        while running:
+        while True:
             await asyncio.sleep(1)
-
             if llm.finished:
-                logger.info("🎯 Interview finished normally")
-                await cleanup_and_shutdown()
+                ctx.shutdown()
+
+                # await simli_avatar.stop()  # clean up
+                lk = api.LiveKitAPI(
+                    url=os.getenv("LIVEKIT_URL"),
+                    api_key=os.getenv("LIVEKIT_API_KEY"),
+                    api_secret=os.getenv("LIVEKIT_API_SECRET"),
+                )
+                await lk.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
                 break
 
-    tasks.append(asyncio.create_task(monitor()))
+    asyncio.create_task(monitor())
+
+
+# @server.rtc_session(agent_name="voice-agent")
+# async def entrypoint(ctx: JobContext):
+#     await ctx.connect()
+
+#     raw_meta = getattr(ctx.job, "metadata", None)
+
+#     if raw_meta:
+#         meta = json.loads(raw_meta)
+#         initial_state = meta.get("initial_state", {})
+#         thread_id = initial_state.get("thread_id", f"room-{ctx.room.name}")
+#     else:
+#         thread_id = f"room-{ctx.room.name}"
+#         initial_state = {
+#             "topic": "fallback",
+#             "question_type": "general",
+#             "cv_text": "",
+#             "max_step": "5",
+#             "thread_id": thread_id,
+#         }
+
+#     llm = SimpleAPILLM(initial_state, thread_id)
+
+#     voice_id = initial_state.get("voice_id", "CwhRBWXzGAHq8TQ4Fs17")
+#     face_id = initial_state.get("face_id", "0c2b8b04-5274-41f1-a21c-d5c98322efa9")
+
+#     session = AgentSession(
+#         llm=llm,
+#         stt="assemblyai/universal-streaming:en",
+#         tts=elevenlabs.TTS(
+#             model="eleven_v2_flash",
+#             voice_id=voice_id,
+#             api_key=os.getenv("ELEVENLABS_API_KEY"),
+#         ),
+#         vad=silero.VAD.load(),
+#         turn_detection=MultilingualModel(),
+#     )
+
+#     simli_avatar = simli.AvatarSession(
+#         simli_config=simli.SimliConfig(
+#             api_key=os.getenv("SIMLI_API_KEY"),
+#             face_id=face_id,
+#         ),
+#     )
+
+#     tasks = []
+#     running = True
+#     is_cleaned = False
+
+#     # -------------------- CLEANUP + SHUTDOWN --------------------
+#     async def cleanup_and_shutdown():
+#         nonlocal running, is_cleaned
+
+#         if is_cleaned:
+#             return
+#         is_cleaned = True
+#         running = False
+
+#         logger.info("🧹 Cleaning up and shutting down...")
+
+#         # Cancel background tasks
+#         for t in tasks:
+#             t.cancel()
+
+#         # Stop avatar
+#         try:
+#             await simli_avatar.stop()
+#             logger.info("✅ Avatar stopped")
+#         except Exception:
+#             pass
+
+#         # Delete room safely
+#         try:
+#             lk = api.LiveKitAPI(
+#                 url=os.getenv("LIVEKIT_URL"),
+#                 api_key=os.getenv("LIVEKIT_API_KEY"),
+#                 api_secret=os.getenv("LIVEKIT_API_SECRET"),
+#             )
+#             await lk.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
+#             logger.info("🗑️ Room deleted")
+#         except Exception as e:
+#             logger.warning(f"Room deletion failed: {e}")
+
+#         ctx.shutdown()
+
+#     # -------------------- DISCONNECT HANDLER --------------------
+#     def on_disconnect(participant):
+#         logger.info(f"⚠️ Participant disconnected: {participant.identity}")
+#         asyncio.create_task(cleanup_and_shutdown())
+
+#     ctx.room.on("participant_disconnected", on_disconnect)
+
+#     # -------------------- START AVATAR --------------------
+#     try:
+#         await simli_avatar.start(session, room=ctx.room)
+#         logger.info("✅ Simli avatar started")
+
+#         async def keep_alive():
+#             while running:
+#                 await asyncio.sleep(4)
+#                 try:
+#                     if ctx.room.connection_state == "connected":
+#                         await simli_avatar.update_expression("neutral")
+#                     else:
+#                         break
+#                 except Exception:
+#                     break
+
+#         tasks.append(asyncio.create_task(keep_alive()))
+
+#     except Exception as e:
+#         logger.error(f"❌ Avatar failed: {e}")
+#         logger.warning("Continuing with voice-only mode")
+
+#     # -------------------- START SESSION --------------------
+#     await session.start(
+#         agent=VoiceAgent(),
+#         room=ctx.room,
+#         room_input_options=RoomInputOptions(
+#             noise_cancellation=noise_cancellation.BVC(),
+#         ),
+#     )
+
+#     await asyncio.sleep(2.0)
+
+#     # -------------------- FIRST QUESTION --------------------
+#     try:
+#         first_message = await llm.get_first_question()
+#         logger.info(f"First question: {first_message[:150]}...")
+
+#         await session.say(first_message, add_to_chat_ctx=False)
+#         logger.info("✅ First message sent")
+
+#     except Exception as e:
+#         logger.error(f"❌ First message error: {e}")
+
+#     # -------------------- MONITOR INTERVIEW --------------------
+#     async def monitor():
+#         while running:
+#             await asyncio.sleep(1)
+
+#             if llm.finished:
+#                 logger.info("🎯 Interview finished normally")
+#                 await cleanup_and_shutdown()
+#                 break
+
+#     tasks.append(asyncio.create_task(monitor()))
 
 
 if __name__ == "__main__":
