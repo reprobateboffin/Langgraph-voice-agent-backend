@@ -1,226 +1,362 @@
-# 🧠 Interview Backend 
 
-This backend implements a **dual-interface AI interview system** consisting of:
+# 🎙️ AI Interview Platform — Backend & Agent Worker
 
-* An **HTTP-based interview API** (FastAPI)
-* A **real-time voice interview agent** (LiveKit Agents)
+This repository contains the **FastAPI backend** and **LiveKit-based agent worker** that power a real-time, voice-enabled AI interview system.
 
-Both interfaces are powered by **LangGraph** for deterministic conversation flow and shared interview state modeling. The system supports CV-based personalization, session persistence, and multi-turn interview orchestration.
+The platform supports both:
 
----
+* **Individual users** practicing interviews
+* **Organizations** conducting automated candidate interviews
 
-## 📘 Table of Contents
-
-1. Backend Components
-2. LangGraph Interview Engine
-3. FastAPI Backend
-
-   * Interview Lifecycle Endpoints
-   * LiveKit Token & Room Provisioning
-4. LiveKit Voice Agent Backend
-
-   * Agent Entrypoint
-   * Active Graph vs Full Graph
-5. State Management & Checkpointing
-6. Environment Configuration
-7. Running the Backend Services
+It combines **real-time communication (WebRTC)** with **LLM-driven interview orchestration**, enabling a fully interactive, voice-based interview experience.
 
 ---
 
-## 1. Backend Components
+# 📚 Table of Contents
 
-The backend is composed of the following primary modules:
+* [Architecture Overview](#-architecture-overview)
+* [System Flow](#-system-flow)
+* [Core Components](#-core-components)
 
-* **FastAPI API server** (`interview.py`)
-* **LiveKit voice agent worker** (`livekit_agent2.py`)
-* **LangGraph interview graphs** (shared conceptual model)
-* **Vector store services** for CV-based retrieval
-* **LLM integrations** (Gemini, Tavily)
-
-Each component is isolated by responsibility but interoperates through structured state and metadata.
-
----
-
-## 2. LangGraph Interview Engine
-
-Interview logic is implemented using **LangGraph**, where the interview is represented as a directed state graph. Each node corresponds to a specific interview stage, such as setup, question generation, answer evaluation, retrieval, or final feedback.
-
-### State Model
-
-Both the HTTP and voice systems rely on a structured interview state containing fields such as:
-
-* `topic`, `question_type`
-* `step`, `max_steps`
-* `questions`, `answers`, `feedback`
-* `cv_content`, `retrieved_context`
-* `needs_retrieval`, `similarity_score`
-* `waiting_for_user`, `final_evaluation`
-
-State is passed between nodes and updated deterministically on each graph invocation.
+  * [FastAPI Backend](#1-fastapi-backend)
+  * [Agent Worker](#2-agent-worker)
+* [Technologies Used](#-technologies-used)
+* [Interview Lifecycle](#-interview-lifecycle)
+* [LLM Integration](#-llm-integration)
+* [Voice & Avatar Pipeline](#-voice--avatar-pipeline)
+* [User vs Organization Flows](#-user-vs-organization-flows)
+* [Authentication](#-authentication)
+* [Database](#-database)
+* [Running the Services](#-running-the-services)
+* [Environment Variables](#-environment-variables)
+* [Design Notes](#-design-notes)
 
 ---
 
-## 3. FastAPI Backend (`interview.py`)
+# 🧩 Architecture Overview
 
-The FastAPI backend exposes endpoints for **text-based interviews** and **LiveKit session provisioning**.
+The system is composed of two loosely coupled services:
 
-### 3.1 Start Interview
+```
+Frontend (React)
+       │
+       ▼
+FastAPI Backend ───────► LangGraph Interview Engine
+       │
+       ▼
+LiveKit (WebRTC)
+       │
+       ▼
+Agent Worker (Voice + LLM + Avatar)
+```
 
-**Endpoint**: `POST /start_interview`
+### Communication Layers
 
-**Responsibilities**:
+| Interaction          | Protocol               |
+| -------------------- | ---------------------- |
+| Frontend ↔ Agent     | WebRTC                 |
+| Agent ↔ Backend      | HTTP                   |
+| Backend ↔ LLM Engine | In-process / LangGraph |
 
-* Create a new interview thread (`thread_id`)
-* Accept job title and question type
-* Optionally process uploaded CV PDFs
-* Extract and chunk CV text
-* Initialize vector stores for retrieval
-* Initialize LangGraph interview state
-* Invoke the interview graph to generate the first question
+This separation ensures:
 
-The endpoint returns the first interview question along with step metadata.
-
----
-
-### 3.2 Continue Interview
-
-**Endpoint**: `POST /continue_interview`
-
-**Responsibilities**:
-
-* Resume an existing interview session using `thread_id`
-* Retrieve checkpointed LangGraph state
-* Inject the user’s response into state
-* Resume graph execution
-* Route output as either:
-
-  * Next interview question
-  * Final evaluation and feedback
-
-The endpoint supports multi-turn interviews and cleans up vector stores upon completion.
+* Real-time performance (WebRTC)
+* Scalable orchestration (HTTP APIs)
+* Stateful interview control (LangGraph)
 
 ---
 
-### 3.3 Join Voice Interview (LiveKit)
+# 🔄 System Flow
 
-**Endpoint**: `POST /join`
+1. Client requests session via:
 
-**Responsibilities**:
+   ```
+   POST /join_meeting
+   ```
 
-* Accept username, job title, room name, question type, and optional CV
-* Process CV text for context
-* Initialize interview state for voice sessions
-* Embed `initial_state` into LiveKit room metadata
-* Generate a LiveKit access token
-* Dispatch the `voice-agent` to the room
+2. Backend:
 
-This endpoint bridges the HTTP backend with the real-time voice agent.
+   * Creates a LiveKit room
+   * Returns access token + metadata
 
----
+3. Both:
 
-## 4. LiveKit Voice Agent Backend (`livekit_agent2.py`)
+   * User (frontend)
+   * Agent worker
 
-The LiveKit backend implements a **real-time AI interviewer** using LiveKit Agents and LangGraph.
+   join the same room
 
-### 4.1 Agent Entrypoint
+4. Interview begins:
 
-The agent is registered using:
+   * Agent fetches first question via backend
+   * Conversation continues via:
 
-* `@server.rtc_session(agent_name="voice-agent")`
-
-On session start, the agent:
-
-* Connects to the LiveKit room
-* Reads `initial_state` from room metadata
-* Initializes a LangGraph workflow
-* Speaks the first interview question
+     * WebRTC (audio/video)
+     * HTTP (LLM orchestration)
 
 ---
 
-### 4.2 Active LangGraph Workflow
+# 🧱 Core Components
 
-The currently active workflow is a **latency-optimized LangGraph** consisting of:
+## 1. FastAPI Backend
 
-* **Setup Node**: Generates the first interview question
-* **Echo Node**: Sends user responses to Gemini and returns generated replies
-* **Router Logic**: Advances steps only when valid user input is detected
+Responsible for:
 
-Checkpointing is handled using **MemorySaver**, scoped to the LiveKit session thread.
+* Authentication (users & organizations)
+* Interview orchestration endpoints
+* LiveKit room/token generation
+* CV processing & retrieval setup
+* Persistence (MongoDB)
 
-This minimal graph is designed for:
+### Key Endpoints
 
-* Real-time speech interaction
-* Low latency response generation
-* Predictable conversational flow
-
----
-
-### 4.3 Full Interview Graph
-
-A full-featured interview graph is present and is responsible for
-
-* Setup and initialization
-* Answer collection
-* Retrieval decision logic
-* Vector-based CV retrieval (RAG)
-* Tavily web search fallback
-* Question generation
-* Answer evaluation
-* Final interview assessment
-* Result display
-
-It also supports persistent checkpointing with:
-
-* PostgreSQL (preferred)
-* SQLite fallback
-* In-memory fallback
-
+| Endpoint                      | Description                 |
+| ----------------------------- | --------------------------- |
+| `/start_interview`            | Initializes interview state |
+| `/continue_interview`         | Advances interview          |
+| `/register`, `/login`         | User auth                   |
+| `/register-org`, `/login-org` | Organization auth           |
+| `/send-invite`                | Candidate invitation        |
 
 ---
 
-## 5. State Management & Checkpointing
+## 2. Agent Worker
 
-* **FastAPI interviews** use LangGraph checkpoints keyed by `thread_id`
-* **Voice interviews** use session-scoped thread IDs
-* Checkpointing enables resumable interviews and deterministic replay
+A **LiveKit RTC worker** that acts as the AI interviewer.
 
-Persistence strategies vary by interface and latency requirements.
+### Responsibilities
 
----
-
-## 6. Environment Configuration
-
-Required environment variables include:
-
-* `LIVEKIT_API_KEY`
-* `LIVEKIT_API_SECRET`
-* `LIVEKIT_URL`
-* `ELEVENLABS_API_KEY`
-* Gemini API credentials
-* Tavily API key
-
-All configuration values should be defined in a `.env` file.
+* Join LiveKit rooms dynamically
+* Handle real-time voice interaction
+* Interface with LLM via backend APIs
+* Manage session lifecycle
+* Stream responses via TTS + avatar
 
 ---
 
-## 7. Running the Backend Services
+# 🛠️ Technologies Used
 
-### FastAPI Server
+### Backend
+
+* **FastAPI** — API framework
+* **Motor (MongoDB)** — async database
+* **JWT (python-jose)** — authentication
+* **LangGraph** — interview state machine / orchestration
+
+### Real-Time Communication
+
+* **LiveKit** — WebRTC infrastructure
+
+### Voice & AI Pipeline
+
+| Component                | Technology                           |
+| ------------------------ | ------------------------------------ |
+| STT (Speech-to-Text)     | AssemblyAI (`universal-streaming`)   |
+| TTS (Text-to-Speech)     | ElevenLabs (`eleven_v2_flash`)       |
+| Voice Activity Detection | Silero VAD                           |
+| Turn Detection           | Multilingual model                   |
+| Avatar Rendering         | Simli                                |
+| LLM Interface            | Custom HTTP wrapper (`SimpleAPILLM`) |
+
+---
+
+# 🧠 Interview Lifecycle
+
+## 1. Start Interview
+
+```
+POST /start_interview
+```
+
+* Builds initial LangGraph state
+* Optionally embeds CV into vector store
+* Returns first question
+
+---
+
+## 2. Continue Interview
+
+```
+POST /continue_interview
+```
+
+* Accepts user response
+* Updates graph state
+* Returns:
+
+  * Next question OR
+  * Final evaluation
+
+---
+
+## 3. Completion
+
+* Interview ends when:
+
+  * `max_steps` reached OR
+  * Graph signals completion
+
+* Final output includes:
+
+  * Feedback
+  * Evaluation
+
+---
+
+# 🔌 LLM Integration
+
+The agent does **not directly host or run the LLM**.
+
+Instead, it delegates via HTTP:
+
+### Start
+
+```python
+POST /start_interview
+```
+
+### Continue
+
+```python
+POST /continue_interview
+```
+
+### Design Rationale
+
+* Centralized logic
+* Stateful execution (LangGraph)
+* Easier scaling & monitoring
+* Decoupled agent runtime
+
+---
+
+# 🎤 Voice & Avatar Pipeline
+
+### Real-Time Interaction
+
+1. User speaks → STT (AssemblyAI)
+2. Transcription sent to backend
+3. LLM generates response
+4. Response → TTS (ElevenLabs)
+5. Audio streamed via LiveKit
+6. Avatar (Simli) lip-syncs with speech
+
+---
+
+### Conversational Layer
+
+The agent injects dynamic fillers to improve realism:
+
+* Reduces robotic transitions
+* Mimics human interviewer behavior
+* Smooths conversational flow
+
+---
+
+# 👥 User vs Organization Flows
+
+The system supports two distinct operational modes:
+
+### 👤 Users
+
+* Practice interviews
+* Upload CV
+* Receive feedback
+* View history
+
+### 🏢 Organizations
+
+* Conduct interviews
+* Invite candidates via email
+* Track interview sessions
+* Retrieve results
+
+Each flow has:
+
+* Separate authentication
+* Separate endpoints
+* Different data models
+
+---
+
+# 🔐 Authentication
+
+* JWT-based authentication
+* Stored in HTTP-only cookies
+
+### Flows
+
+| Type               | Endpoint     |
+| ------------------ | ------------ |
+| User Login         | `/login`     |
+| Organization Login | `/login-org` |
+
+---
+
+# 🗄️ Database
+
+MongoDB (async via Motor)
+
+### Collections
+
+* `users`
+* `interviews`
+* `rooms`
+
+---
+
+# 🚀 Running the Services
+
+## Backend
+
+Navigate to:
+
+```
+interviewer_chatbot/backend/
+```
+
+Run:
 
 ```bash
 uv run uvicorn main:app --reload
 ```
 
-### LiveKit Agent Worker
+---
+
+## Agent Worker
+
+From the same directory:
 
 ```bash
-uv run livekit_agent2.py
+uv run livekit_agent2.py dev
 ```
-
-The LiveKit agent will activate automatically when dispatched to a room via the `/join` endpoint.
 
 ---
 
-## ✅ Summary
+# 🔑 Environment Variables
 
-This backend provides a **shared interview engine** exposed through both HTTP and real-time voice interfaces. By combining FastAPI, LiveKit Agents, LangGraph, retrieval services, and LLMs, the system supports structured, resumable, and context-aware technical interviews across multiple interact
+Required configuration:
+
+```
+LIVEKIT_API_KEY=
+LIVEKIT_API_SECRET=
+LIVEKIT_URL=
+
+MONGODB_URI=
+
+ELEVENLABS_API_KEY=
+SIMLI_API_KEY=
+
+MAIL_USERNAME=
+MAIL_PASSWORD=
+```
+
+---
+
+# 🧭 Design Notes
+
+* WebRTC is strictly used for **media streaming**
+* All **LLM logic is HTTP-driven**, not real-time
+* Agent is **stateless**, backend holds interview state
+* Avatar layer is **optional** (graceful fallback to voice)
+* System is designed for **scalability and modularity**
