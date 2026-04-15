@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Optional
 from fastapi import FastAPI, Response, HTTPException, APIRouter, Body
 from utils.auth import hash_password, verify_password, create_token
@@ -5,6 +6,65 @@ from pydantic import BaseModel, Field
 from config.settings import settings
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+from fastapi import (
+    FastAPI,
+    Response,
+    HTTPException,
+    APIRouter,
+    Request,
+    Depends,
+)
+from bson import ObjectId
+from utils.auth import (
+    hash_password,
+    verify_password,
+    create_token,
+    SECRET,
+)  # Import SECRET from auth.py
+from jose import jwt, JWTError
+
+from typing import List, Optional
+from pydantic import BaseModel, Field
+
+SECRET = "supersecret"
+from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
+
+
+class EmailSchema(BaseModel):
+    email: str
+    link: str
+    username: str
+    job_title: str
+
+
+class OrgDetails(BaseModel):
+    companyName: str
+    companyAddress: str
+    industry: str
+
+
+class OrgRegister(BaseModel):
+    username: str
+    email: str
+    password: str
+    organization: OrgDetails
+    isCompany: bool
+
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+
+class InterviewByIdRequest(BaseModel):
+    interview_id: str
+
+
+class InterviewRequest(BaseModel):
+    user_id: str
+    interview_id: Optional[str] = None
+    type: str
+
 
 router = APIRouter(tags=["user"])
 LIVEKIT_API_KEY = settings.livekit_api_key
@@ -23,9 +83,32 @@ class UserRegister(BaseModel):
 uri = os.getenv("MONGODB_URI")
 
 client = AsyncIOMotorClient(uri)
-db = client["interviews_db"]  # auto-created
-users_collection = db["user"]  # auto-created
+db = client["interviews_db"]
+users_collection = db["user"]
 interview_collection = db["interviews"]
+rooms_collection = db["rooms"]
+
+
+async def get_current_user(request: Request):
+    token = request.cookies.get("access_token")
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        payload = jwt.decode(token, SECRET, algorithms=["HS256"])
+        user_id = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid token payload")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user = await users_collection.find_one({"_id": ObjectId(user_id)})
+
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    return user
 
 
 @router.post("/register")
@@ -42,29 +125,14 @@ async def register(user: UserRegister, response: Response):
     user_id = str(result.inserted_id)
     token = create_token(user_id)
 
-    # Set HttpOnly cookie
     response.set_cookie(
         key="access_token",
         value=token,
         httponly=True,
-        samesite="lax",  # or 'strict'
-        max_age=3600,  # 1 hour
+        samesite="lax",
+        max_age=36000,
     )
     return {"message": "User registered"}
-
-
-class OrgDetails(BaseModel):
-    companyName: str
-    companyAddress: str
-    industry: str
-
-
-class OrgRegister(BaseModel):
-    username: str
-    email: str
-    password: str
-    organization: OrgDetails
-    isCompany: bool
 
 
 @router.post("/register-org")
@@ -74,14 +142,13 @@ async def register_org(user: OrgRegister, response: Response):
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # 2. Hash password and prepare document
     hashed_pw = hash_password(user.password)
 
     org_document = {
         "username": user.username,
         "email": user.email,
         "hashed_password": hashed_pw,
-        "isCompany": True,  # Flag to distinguish from regular users
+        "isCompany": True,
         "company_info": {
             "name": user.organization.companyName,
             "address": user.organization.companyAddress,
@@ -89,11 +156,9 @@ async def register_org(user: OrgRegister, response: Response):
         },
     }
 
-    # 3. Insert into MongoDB
     result = await users_collection.insert_one(org_document)
     user_id = str(result.inserted_id)
 
-    # 4. Create token and set cookie (Automatic Login)
     token = create_token(user_id)
 
     response.set_cookie(
@@ -101,7 +166,7 @@ async def register_org(user: OrgRegister, response: Response):
         value=token,
         httponly=True,
         samesite="lax",
-        max_age=3600,  # 1 hour
+        max_age=36000,
     )
 
     return {
@@ -110,109 +175,49 @@ async def register_org(user: OrgRegister, response: Response):
     }
 
 
-from fastapi import (
-    FastAPI,
-    Response,
-    HTTPException,
-    APIRouter,
-    Request,
-    Depends,
-)  # Added Depends
-from bson import ObjectId  # Added for MongoDB lookups
-from utils.auth import (
-    hash_password,
-    verify_password,
-    create_token,
-    SECRET,
-)  # Import SECRET from auth.py
-from jose import jwt, JWTError
-
-SECRET = "supersecret"
-
-
-async def get_current_user(request: Request):
-    token = request.cookies.get("access_token")
-
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    try:
-        # Use the SAME secret imported from your auth module
-        payload = jwt.decode(token, SECRET, algorithms=["HS256"])
-        user_id = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="Invalid token payload")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    # Correctly convert string user_id back to MongoDB ObjectId
-    user = await users_collection.find_one({"_id": ObjectId(user_id)})
-
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-
-    return user
-
-
 @router.get("/me")
-async def get_me(user: dict = Depends(get_current_user)):  # Corrected syntax
+async def get_me(user: dict = Depends(get_current_user)):
     print(f'sending username: {user["username"]}s data to frontend')
     return {"username": user["username"], "email": user["email"]}
 
 
-class UserLogin(BaseModel):
-    email: str
-    password: str
-
-
 @router.post("/login")
 async def login(user_data: UserLogin, response: Response):
-    # 1. Find user by email
     user = await users_collection.find_one({"email": user_data.email})
 
-    # 2. Check if user exists AND password is correct
     if not user or not verify_password(user_data.password, user["hashed_password"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if user.get("isCompany"):
         raise HTTPException(status_code=403, detail="Please login as a corporation")
 
-    # 3. Create a fresh token
     user_id = str(user["_id"])
     token = create_token(user_id)
 
-    # 4. Set the HttpOnly cookie (match your /register settings)
     response.set_cookie(
         key="access_token",
         value=token,
         httponly=True,
         samesite="lax",
-        max_age=3600,  # 1 hour
+        max_age=3600,
     )
 
     return {"message": "Login successful", "username": user["username"]}
 
 
-from typing import List, Optional
-from pydantic import BaseModel, Field
-
-
-# 1. Create a class for the request body
-class InterviewRequest(BaseModel):
-    user_id: str
-    interview_id: Optional[str] = None
-    type: str
-
-
 @router.post("/get-interviews")
-async def get_interviews(request: InterviewRequest):  # <--- Use the model here
-    # Access data using request.user_id
+async def get_interviews(request: InterviewRequest):
     if request.type == "user":
         query = {"user_id": request.user_id}
     else:
         query = {"company_name": request.user_id}
 
-    # Only return specific fields
-    projection = {"_id": 1, "interview_id": 1, "user_id": 1, "createdAt": 1}
+    projection = {
+        "_id": 1,
+        "interview_id": 1,
+        "user_id": 1,
+        "createdAt": 1,
+        "room_name": 1,
+    }
 
     cursor = interview_collection.find(query, projection)
     interviews = await cursor.to_list(length=100)
@@ -221,10 +226,6 @@ async def get_interviews(request: InterviewRequest):  # <--- Use the model here
         item["_id"] = str(item["_id"])
 
     return interviews
-
-
-class InterviewByIdRequest(BaseModel):
-    interview_id: str
 
 
 @router.post("/get-interview-results")
@@ -236,7 +237,6 @@ async def get_interview_results(request: InterviewByIdRequest):
     if not interview:
         return {"message": "Interview not found"}
 
-    # Convert ObjectId to string
     interview["_id"] = str(interview["_id"])
 
     return interview
@@ -244,20 +244,16 @@ async def get_interview_results(request: InterviewByIdRequest):
 
 @router.post("/login-org")
 async def login_org(user_data: UserLogin, response: Response):
-    # 1. Find ONLY company users
     user = await users_collection.find_one(
         {"email": user_data.email, "isCompany": True}
     )
 
-    # 2. Validate
     if not user or not verify_password(user_data.password, user["hashed_password"]):
         raise HTTPException(status_code=401, detail="Invalid company credentials")
 
-    # 3. Token
     user_id = str(user["_id"])
     token = create_token(user_id)
 
-    # 4. Cookie
     response.set_cookie(
         key="access_token",
         value=token,
@@ -269,24 +265,45 @@ async def login_org(user_data: UserLogin, response: Response):
     return {"message": "Company login successful", "username": user["username"]}
 
 
+@router.post("/get-pending-interviews")
+async def get_pending_interviews(request: InterviewRequest):
+    if request.type == "user":
+        query = {"username": request.user_id, "isCompany": False}
+    else:
+        query = {"company_name": request.user_id, "isCompany": True}
+
+    cursor = rooms_collection.find(query).sort("createdAt", -1)
+    rooms = await cursor.to_list(length=100)
+
+    formatted_pending = []
+    for doc in rooms:
+        formatted_pending.append(
+            {
+                "_id": str(doc["_id"]),
+                "user_id": doc.get("username"),
+                "interview_id": doc.get("room_name"),
+                "createdAt": (
+                    doc["createdAt"].isoformat()
+                    if isinstance(doc["createdAt"], datetime)
+                    else doc["createdAt"]
+                ),
+                "job_title": doc.get("job_title", "Interview Session"),
+                "room_name": doc.get("room_name", "room Session"),
+            }
+        )
+
+    return formatted_pending
+
+
 @router.post("/logout")
 async def logout(response: Response):
-    # This overwrites the cookie with an empty value and an immediate expiration
     response.delete_cookie(
         key="access_token",
         httponly=True,
-        samesite="lax",  # Must match your registration settings
-        # secure=True,  # Add this if you are using HTTPS
+        samesite="lax",
+        secure=True,
     )
     return {"message": "Logged out successfully"}
-
-
-from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
-
-
-class EmailSchema(BaseModel):
-    email: str
-    link: str
 
 
 conf = ConnectionConfig(
@@ -303,10 +320,18 @@ conf = ConnectionConfig(
 
 @router.post("/send-invite")
 async def send_invite(data: EmailSchema):
+    query = {"username": data.username}
+    company = await users_collection.find_one(query)
+
+    if not company:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    company_name = company.get("company_info", {}).get("name", "Unknown Company")
+
     message = MessageSchema(
-        subject="Meeting Invitation",
+        subject=f"Meeting Invitation from {company_name}",
         recipients=[data.email],
-        body=f"Join the meeting: {data.link}",
+        body=f"Join the meeting: You have been invited to join an interview for the position {data.job_title}, you can access it at : {data.link}",
         subtype="plain",
     )
 

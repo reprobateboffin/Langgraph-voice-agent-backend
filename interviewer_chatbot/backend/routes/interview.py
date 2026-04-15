@@ -10,10 +10,25 @@ from livekit.api import (
     RoomConfiguration,
     RoomAgentDispatch,
 )
+
+from bson import ObjectId
+
 from utils.cv_tools import extract_text_from_pdf_bytes, chunk_cv_text
 from services.vectorstore_service import create_vectorstore, delete_vectorstore
 from graph.graph import compiled_graph
 from config.settings import settings
+
+rooms_db = {}  # Use a real DB or Redis in production
+from motor.motor_asyncio import AsyncIOMotorClient
+import os
+
+uri = os.getenv("MONGODB_URI")
+client = AsyncIOMotorClient(uri)
+db = client["interviews_db"]
+rooms_collection = db["rooms"]
+characters_collection = db["characters"]
+interview_collection = db["interviews"]
+from datetime import datetime, timedelta, timezone
 
 router = APIRouter(tags=["Interview"])
 
@@ -22,7 +37,17 @@ LIVEKIT_API_SECRET = settings.livekit_api_secret
 LIVEKIT_URL = settings.livekit_url
 
 
-# -------------------- START INTERVIEW --------------------
+class CharacterResponse(BaseModel):
+    id: str
+    name: str
+    image: str
+    voice_id: str
+    face_id: str
+
+
+class ContinueRequest(BaseModel):
+    user_response: str
+    thread_id: str
 
 
 @router.post("/start_interview")
@@ -34,6 +59,7 @@ async def start_interview(
     thread_id: str = Form(...),
     username: str = Form(...),
     interview_id: str = Form(...),
+    room_name: str = Form(...),
     isCompany: bool = Form(...),
     company_name: Optional[str] = Form(...),
 ):
@@ -41,7 +67,6 @@ async def start_interview(
         config = {"configurable": {"thread_id": thread_id}}
         user_id = username
 
-        # only create vectorstore if cv_text exists
         if cv_text:
             document = chunk_cv_text(cv_text, user_id=user_id)
             create_vectorstore(document, user_id=user_id)
@@ -69,6 +94,7 @@ async def start_interview(
             "isCompany": isCompany,
             "interview_id": interview_id,
             "company_name": company_name,
+            "room_name": room_name,
         }
 
         final_state = compiled_graph.invoke(initial_state, config=config)
@@ -84,14 +110,6 @@ async def start_interview(
     except Exception as e:
         print("START ERROR:", e)
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# -------------------- CONTINUE --------------------
-
-
-class ContinueRequest(BaseModel):
-    user_response: str
-    thread_id: str
 
 
 @router.post("/continue_interview")
@@ -144,20 +162,6 @@ async def continue_interview(req: ContinueRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# -------------------- JOIN --------------------
-# In a new or existing FastAPI file
-rooms_db = {}  # Use a real DB or Redis in production
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
-
-uri = os.getenv("MONGODB_URI")
-client = AsyncIOMotorClient(uri)
-db = client["interviews_db"]  # auto-created
-rooms_collection = db["rooms"]  # auto-created
-characters_collection = db["characters"]
-from datetime import datetime, timedelta, timezone
-
-
 @router.post("/register-room")
 async def register_room(
     username: str = Form(...),
@@ -167,10 +171,9 @@ async def register_room(
     cv: UploadFile | None = File(None),
     max_step: str = Form(...),
     company_name: Optional[str] = Form(None),
-    voice_id: Optional[str] = Form(None),  # ← Changed to Optional + default None
-    face_id: Optional[str] = Form(None),  # ← Changed to Optional + default None
+    voice_id: Optional[str] = Form(None),
+    face_id: Optional[str] = Form(None),
 ):
-    # Store the settings for this specific room
     try:
         cv_text = ""
 
@@ -199,26 +202,76 @@ async def register_room(
             "face_id": face_id,
         }
     )
+    # Run this once when your app starts up
+    await rooms_collection.create_index(
+        "createdAt", expireAfterSeconds=259200  # 3 days in seconds
+    )
+
     return {"status": "registered in database"}
+
+
+class DeleteRoomRequest(BaseModel):
+    room_name: str
+    status: str
+
+
+@router.post("/delete-room")
+async def delete_room(payload: DeleteRoomRequest):
+    try:
+        if not payload.room_name or not payload.status:
+            raise HTTPException(
+                status_code=400, detail="room_name and status are required"
+            )
+
+        status = payload.status.lower()
+
+        if status == "pending":
+            result = await rooms_collection.delete_one({"room_name": payload.room_name})
+
+            if result.deleted_count == 0:
+                raise HTTPException(status_code=404, detail="Pending room not found")
+
+            return {
+                "message": "Pending room deleted successfully",
+                "room_name": payload.room_name,
+            }
+
+        elif status == "finished":
+            result = await interview_collection.delete_one(
+                {"room_name": payload.room_name}
+            )
+
+            if result.deleted_count == 0:
+                raise HTTPException(
+                    status_code=404, detail="Finished interview not found"
+                )
+
+            return {
+                "message": "Finished interview deleted successfully",
+                "room_name": payload.room_name,
+            }
+
+        else:
+            raise HTTPException(status_code=400, detail="Invalid status value")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("DELETE ROOM ERROR:", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/cleanup-old-rooms")
 async def cleanup_old_rooms():
     try:
-        # Calculate cutoff time (2 days ago)
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=2)
 
-        # Delete all rooms older than 2 days
         result = await rooms_collection.delete_many({"createdAt": {"$lt": cutoff_date}})
 
         return {"status": "success", "deleted_count": result.deleted_count}
 
     except Exception as e:
         return {"status": "error", "message": str(e)}
-
-
-class DeleteRoomRequest(BaseModel):
-    room_name: str
 
 
 @router.post("/delete-room")
@@ -240,14 +293,6 @@ async def delete_room(payload: DeleteRoomRequest):
     except Exception as e:
         print("Error deleting room:", e)
         raise HTTPException(status_code=500, detail="Internal server error")
-
-
-class CharacterResponse(BaseModel):
-    id: str
-    name: str
-    image: str
-    voice_id: str
-    face_id: str
 
 
 @router.get("/characters", response_model=List[CharacterResponse])
@@ -274,10 +319,6 @@ async def get_characters():
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
-from fastapi import HTTPException
-from bson import ObjectId
-
-
 @router.get("/get-room-info/{room_name}")
 async def get_room_info(room_name: str):
     try:
@@ -286,7 +327,6 @@ async def get_room_info(room_name: str):
         if not room:
             raise HTTPException(status_code=404, detail="Room not found")
 
-        # Convert ObjectId to string
         room["_id"] = str(room["_id"])
 
         return {
@@ -305,80 +345,14 @@ async def get_room_info(room_name: str):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.post("/join")
-async def join_meeting(
-    username: str = Form(...),
-    job_title: str = Form(...),
-    room_name: str = Form(...),
-    question_type: str = Form(...),
-    cv: UploadFile | None = File(None),
-    max_step: str = Form(...),
-):
-    try:
-        cv_text = ""
-
-        if cv:
-            cv_bytes = await cv.read()
-            if cv_bytes:
-                try:
-                    cv_text = extract_text_from_pdf_bytes(cv_bytes)
-                except Exception as e:
-                    print("CV ERROR:", e)
-
-        thread_id = str(uuid.uuid4())
-
-        if cv_text:
-            document = chunk_cv_text(cv_text, user_id=username)
-            create_vectorstore(document, user_id=username)
-
-        metadata = {
-            "initial_state": {
-                "topic": job_title,
-                "question_type": question_type,
-                "cv_text": cv_text,
-                "max_step": max_step,
-                "thread_id": thread_id,
-            }
-        }
-
-        token = (
-            AccessToken(api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
-            .with_identity(username)
-            .with_grants(VideoGrants(room_join=True, room=room_name))
-            .with_room_config(
-                RoomConfiguration(
-                    agents=[
-                        RoomAgentDispatch(
-                            agent_name="voice-agent",
-                            metadata=json.dumps(metadata),
-                        )
-                    ]
-                )
-            )
-            .to_jwt()
-        )
-
-        return {
-            "token": token,
-            "url": LIVEKIT_URL,
-            "room_name": room_name,
-        }
-
-    except Exception as e:
-        print("JOIN ERROR:", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post("/join-meeting")
 async def join_meeting(
     room_name: str = Form(...),
     is_company: str = Form(...),
 ):
-    # Validate room exists
     isCompany = is_company
     is_company_bool = isCompany.lower() == "true"
 
-    # Or with better validation
     if isCompany.lower() not in ["true", "false"]:
         raise HTTPException(status_code=400, detail="isCompany must be true or false")
     is_company_bool = isCompany.lower() == "true"
@@ -387,7 +361,6 @@ async def join_meeting(
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
     company_name = "None"
-    # Extract fields with defaults and validation
     cv_text = room.get("cv_text", "")
     username = room.get("username")
     job_title = room.get("job_title")
@@ -398,7 +371,6 @@ async def join_meeting(
     voice_id = room.get("voice_id")
     if is_company_bool:
         company_name = room.get("company_name")
-    # Validate required fields
     required_fields = [username, job_title, question_type, max_step]
     if not all(required_fields):
         missing = ["username", "job_title", "question_type", "max_step"][
@@ -410,7 +382,6 @@ async def join_meeting(
         )
 
     try:
-        # Process CV if present
         if cv_text and cv_text.strip():
             document = chunk_cv_text(cv_text, user_id=username)
             create_vectorstore(document, user_id=username)
@@ -432,8 +403,6 @@ async def join_meeting(
             }
         }
 
-        # Optionally exclude cv_text from metadata if not needed
-        # Only add cv_text if necessary
         if cv_text:
             metadata["initial_state"]["cv_text"] = cv_text
 

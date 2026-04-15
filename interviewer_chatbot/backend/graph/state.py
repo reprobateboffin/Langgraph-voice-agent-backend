@@ -34,3 +34,4 @@ class InterviewState(TypedDict):
     isCompany: bool
     company_name: str
     interview_id: str
+    room_name: str

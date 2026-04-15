@@ -31,9 +31,6 @@ server = AgentServer()
 BACKEND_URL = settings.backend_url
 
 
-# -------------------- API CALLS --------------------
-
-
 async def run_graph_start(initial_state: dict, thread_id: str) -> dict:
     interview_id = str(
         thread_id[5]
@@ -55,6 +52,7 @@ async def run_graph_start(initial_state: dict, thread_id: str) -> dict:
                 "isCompany": bool(initial_state.get("isCompany", False)),
                 "interview_id": interview_id,
                 "company_name": str(initial_state.get("company_name", "None")),
+                "room_name": str(initial_state.get("room_name", "None")),
             },
         )
         print("START:", r.status_code, r.text)

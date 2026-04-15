@@ -338,7 +338,6 @@ def evaluate_question_node(state: Mapping[str, Any]) -> Dict[str, Any]:
     )
     try:
 
-        # raw = gemini_client.generate_content(prompt)
         raw = _safe_generate(prompt)
 
         parsed_eval = parse_json_answer_feedback(raw)
@@ -404,6 +403,7 @@ def final_evaluation_node(state: Mapping[str, Any]) -> Dict[str, Any]:
         is_company = state.get("isCompany", False)
 
         interview_id = state.get("interview_id", "nnnooo")
+        room_name = state.get("room_name", "NoNameFound")
         if is_company:
             company_name = state.get("company_name", "NoneFound")
         else:
@@ -419,6 +419,7 @@ def final_evaluation_node(state: Mapping[str, Any]) -> Dict[str, Any]:
                 "isCompany": is_company,
                 "createdAt": datetime.now(timezone.utc),
                 "company_name": company_name,
+                "room_name": room_name,
             }
         )
 
