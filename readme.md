@@ -21,6 +21,8 @@ It combines **real-time communication (WebRTC)** with **LLM-driven interview orc
 * [Technologies Used](#-technologies-used)
 * [Interview Lifecycle](#-interview-lifecycle)
 * [LLM Integration & Fallback Strategy](#-llm-integration--fallback-strategy)
+* [LangGraph Interview Flow](#-llm-flow)
+
 * [Voice & Avatar Pipeline](#-voice--avatar-pipeline)
 * [User vs Organization Flows](#-user-vs-organization-flows)
 * [Authentication](#-authentication)
@@ -148,6 +150,33 @@ A **LiveKit RTC worker** that serves as the AI interviewer.
 # 🔌 LLM Integration & Fallback Strategy
 
 The agent **does not directly host** any LLM. All LLM calls are delegated via HTTP to the backend, which uses a **multi-provider fallback system** for maximum reliability.
+
+# 🔄 LangGraph Interview Flow
+
+The interview logic is orchestrated using a **stateful LangGraph workflow**, enabling dynamic decision-making, retrieval augmentation, and adaptive questioning.
+
+### Core Capabilities
+- Conditional RAG retrieval (vector DB vs Tavily search)
+- Dynamic question generation
+- Iterative evaluation loop
+- Final candidate assessment
+
+### Flow Diagram
+
+![RAG Workflow](./rag_design.png)
+
+### Explanation
+
+1. **Setup** initializes the interview state  
+2. **Get Answer** collects user input  
+3. **Retrieval Decision** determines:
+   - RAG (vector DB)  
+   - Tavily (web search)  
+4. **Question Generation** adapts based on retrieved context  
+5. **Evaluation** scores response and updates state  
+6. Loop continues until `max_questions` is reached  
+7. **Final Evaluation** produces overall feedback  
+8. Results are displayed and interview ends  
 
 ### Safe Generation Function
 
